@@ -1,0 +1,18 @@
+https://github.com/ArduPilot/ardupilot/tree/master/libraries/AP_HAL_ChibiOS/hwdef/CubeBlack
+
+grab a plausibls svd for 427:
+https://github.com/tinygo-org/stm32-svd/blob/main/svd/stm32f427.svd
+
+cp ../saturn/config.yaml .
+
+hack on the yaml file.
+
+create the run file.
+
+cargo run --release -- config.yaml -v
+
+./run.sh
+
+
+
+
