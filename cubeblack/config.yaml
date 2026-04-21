@@ -59,6 +59,67 @@ devices:
   ramtron:
     - peripheral: SPI2
       cs_pin: PD10
+
+  # CubeBlack board-validation sensors.
+  # HAL_VALIDATE_BOARD in hwdef.h checks all 6 entries before any driver init.
+  # If any check fails, ArduPilot enters an infinite error loop and never boots.
+  #
+  # SPI bus mapping (ArduPilot 0-indexed == ChibiOS SPIDn):
+  #   bus 0 → SPI1 (0x40013000)  mpu9250, lsm9ds0_g/am, ms5611
+  #   bus 2 → SPI4 (0x40013400)  mpu9250_ext, lsm9ds0_ext_g/am, ms5611_ext
+  spi_mux:
+    # SPI1 sensors
+    - peripheral: SPI1
+      sensors:
+        # ms5611 baro — check_ms5611(): RESET(0x1E) + 8×PROM word reads, CRC4 validated
+        - cs_pin: PD7
+          type: ms5611
+          name: ms5611
+        # mpu9250 IMU — spi_check_register(0x75, 0x71)
+        - cs_pin: PC2
+          type: who_am_i
+          name: mpu9250
+          reg: 0x75
+          val: 0x71
+        # lsm9ds0_g gyro — spi_check_register(0x0F, 0xD4)
+        - cs_pin: PC13
+          type: who_am_i
+          name: lsm9ds0_g
+          reg: 0x0F
+          val: 0xD4
+        # lsm9ds0_am accel/mag — spi_check_register(0x0F, 0x49)
+        - cs_pin: PC15
+          type: who_am_i
+          name: lsm9ds0_am
+          reg: 0x0F
+          val: 0x49
+
+    # SPI4 sensors
+    - peripheral: SPI4
+      sensors:
+        # ms5611_ext baro — check_ms5611(): RESET(0x1E) + 8×PROM word reads, CRC4 validated
+        - cs_pin: PC14
+          type: ms5611
+          name: ms5611_ext
+        # mpu9250_ext IMU — spi_check_register(0x75, 0x71)
+        - cs_pin: PE4
+          type: who_am_i
+          name: mpu9250_ext
+          reg: 0x75
+          val: 0x71
+        # lsm9ds0_ext_g gyro — spi_check_register(0x0F, 0xD4)
+        - cs_pin: PC13
+          type: who_am_i
+          name: lsm9ds0_ext_g
+          reg: 0x0F
+          val: 0xD4
+        # lsm9ds0_ext_am accel/mag — spi_check_register(0x0F, 0x49)
+        - cs_pin: PC15
+          type: who_am_i
+          name: lsm9ds0_ext_am
+          reg: 0x0F
+          val: 0x49
+
   usart_probe:
     - peripheral: USART1
     - peripheral: USART2

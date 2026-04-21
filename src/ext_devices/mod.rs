@@ -6,6 +6,7 @@ mod display;
 mod lcd;
 mod touchscreen;
 mod ramtron;
+mod spi_sensors;
 
 use spi_flash::{SpiFlashConfig, SpiFlash};
 use usart_probe::{UsartProbeConfig, UsartProbe};
@@ -13,6 +14,7 @@ use display::{DisplayConfig, Display};
 use lcd::{LcdConfig, Lcd};
 use touchscreen::{TouchscreenConfig, Touchscreen};
 use ramtron::{RamtronConfig, Ramtron};
+pub use spi_sensors::{SpiMuxConfig, SpiMux};
 
 use std::{rc::Rc, cell::RefCell};
 use serde::Deserialize;
@@ -29,6 +31,7 @@ pub struct ExtDevicesConfig {
     pub lcd: Option<Vec<LcdConfig>>,
     pub touchscreen: Option<Vec<TouchscreenConfig>>,
     pub ramtron: Option<Vec<RamtronConfig>>,
+    pub spi_mux: Option<Vec<SpiMuxConfig>>,
 }
 
 pub struct ExtDevices {
@@ -38,6 +41,7 @@ pub struct ExtDevices {
     pub lcds: Vec<Rc<RefCell<Lcd>>>,
     pub touchscreens: Vec<Rc<RefCell<Touchscreen>>>,
     pub ramtrons: Vec<Rc<RefCell<Ramtron>>>,
+    pub spi_muxes: Vec<Rc<RefCell<SpiMux>>>,
 }
 
 impl ExtDevices {
@@ -67,6 +71,12 @@ impl ExtDevices {
         .or_else(||
         self.ramtrons.iter()
             .filter(|d| d.borrow().config.peripheral == peri_name)
+            .next()
+            .map(|d| d.clone() as Rc<RefCell<dyn ExtDevice<(), u8>>>)
+       )
+        .or_else(||
+        self.spi_muxes.iter()
+            .filter(|d| d.borrow().peripheral == peri_name)
             .next()
             .map(|d| d.clone() as Rc<RefCell<dyn ExtDevice<(), u8>>>)
        )
@@ -121,7 +131,25 @@ impl ExtDevicesConfig {
             });
         }
 
-        Ok(ExtDevices { spi_flashes, usart_probes, displays, lcds, touchscreens, ramtrons })
+        // Build SpiMux instances and wire GPIO CS callbacks for each sensor slot
+        let spi_muxes: Vec<Rc<RefCell<SpiMux>>> = self.spi_mux.unwrap_or_default()
+            .into_iter()
+            .map(|config| Rc::new(RefCell::new(SpiMux::new(config))))
+            .collect();
+
+        for mux_rc in &spi_muxes {
+            let cs_pins = mux_rc.borrow().cs_pins();
+            for cs_pin_str in cs_pins {
+                let mux = mux_rc.clone();
+                let cs = cs_pin_str.clone();
+                let pin = Pin::from_str(&cs_pin_str);
+                gpio.add_write_callback(pin, move |_sys, value| {
+                    mux.borrow_mut().on_cs_change(&cs, value);
+                });
+            }
+        }
+
+        Ok(ExtDevices { spi_flashes, usart_probes, displays, lcds, touchscreens, ramtrons, spi_muxes })
     }
 }
 
