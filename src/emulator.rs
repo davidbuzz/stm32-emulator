@@ -206,6 +206,10 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     EXCP_LSERR          21   /* v8M LSERR SecureFault */
                     EXCP_UNALIGNED      22   /* v7M UNALIGNED UsageFault */
                     */
+                2 => {
+                    let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
+                    p.nvic.borrow_mut().run_interrupt(&sys, crate::peripherals::nvic::irq::SVCALL);
+                }
                 8 => {
                     // Return from interrupt
                     let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
@@ -232,8 +236,20 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
 
         unsafe {
             let pc = uc.reg_read(RegisterARM::PC).expect("failed to get pc");
-            assert!(pc as u32 == LAST_INSTRUCTION.0);
-            uc.reg_write(RegisterARM::PC, thumb(pc as u64 + LAST_INSTRUCTION.1 as u64)).unwrap();
+            if pc as u32 == LAST_INSTRUCTION.0 {
+                uc.reg_write(RegisterARM::PC, thumb(pc as u64 + LAST_INSTRUCTION.1 as u64)).unwrap();
+            } else {
+                // Branch targets can fault on fetch after PC has already changed.
+                // In that case, advance from the last known executed instruction.
+                warn!(
+                    "unmapped hook pc mismatch pc=0x{:08x} last_pc=0x{:08x} size={} advancing from last instruction",
+                    pc as u32,
+                    LAST_INSTRUCTION.0,
+                    LAST_INSTRUCTION.1,
+                );
+                let next = (LAST_INSTRUCTION.0 as u64).saturating_add(LAST_INSTRUCTION.1 as u64);
+                uc.reg_write(RegisterARM::PC, thumb(next)).unwrap();
+            }
         }
 
         CONTINUE_EXECUTION.store(true, Ordering::Release);

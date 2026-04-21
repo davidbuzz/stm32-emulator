@@ -24,7 +24,8 @@ pub struct Nvic {
 
     // 128 different interrupts. Good enough for now
     pending: u128,
-    in_interrupt: bool,
+    enabled: u128,
+    active_exceptions: u32,
 }
 
 const IRQ_OFFSET: i32 = 16;
@@ -60,20 +61,30 @@ impl Nvic {
     }
 
     pub fn next_pending_intr(&self) -> Option<i32> {
-        if self.pending != 0 {
-            let bit = self.pending.trailing_zeros();
-            Some((bit as i32) - IRQ_OFFSET)
+        self.next_dispatchable_bit().map(|bit| (bit as i32) - IRQ_OFFSET)
+    }
+
+    pub fn get_and_clear_next_intr_pending(&mut self) -> Option<i32> {
+        if let Some(bit) = self.next_dispatchable_bit() {
+            self.pending &= !(1 << bit);
+            let irq = (bit as i32) - IRQ_OFFSET;
+            Some(irq)
         } else {
             None
         }
     }
 
-    pub fn get_and_clear_next_intr_pending(&mut self) -> Option<i32> {
-        if self.pending != 0 {
-            let bit = self.pending.trailing_zeros();
-            self.pending &= !(1 << bit);
-            let irq = (bit as i32) - IRQ_OFFSET;
-            Some(irq)
+    fn next_dispatchable_bit(&self) -> Option<u32> {
+        let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
+        let sys_pending = self.pending & sys_pending_mask;
+        if sys_pending != 0 {
+            return Some(sys_pending.trailing_zeros());
+        }
+
+        let ext_pending = self.pending >> IRQ_OFFSET;
+        let dispatchable = ext_pending & self.enabled;
+        if dispatchable != 0 {
+            Some(dispatchable.trailing_zeros() + IRQ_OFFSET as u32)
         } else {
             None
         }
@@ -104,11 +115,11 @@ impl Nvic {
     pub fn run_pending_interrupts(&mut self, sys: &System) {
         self.maybe_set_systick_intr_pending();
 
-        if Self::are_interrupts_disabled(sys) || self.in_interrupt {
+        if Self::are_interrupts_disabled(sys) || self.active_exceptions > 0 {
             trace!(
-                "Interrupt dispatch blocked primask={} in_interrupt={} pending=0x{:032x}",
+                "Interrupt dispatch blocked primask={} active_exceptions={} pending=0x{:032x}",
                 sys.uc.borrow().reg_read(RegisterARM::PRIMASK).unwrap(),
-                self.in_interrupt,
+                self.active_exceptions,
                 self.pending
             );
             return;
@@ -139,7 +150,13 @@ impl Nvic {
         // SPSEL, bit[1], 0 means we use MSP, 1 means we use PSP.
         // FPCA, bit[2], if the processor includes the FP extension.
         let control_reg = uc.reg_read(RegisterARM::CONTROL).unwrap();
-        let spsel = control_reg & (1 << 1) != 0;
+        let in_handler_mode = uc.reg_read(RegisterARM::IPSR).unwrap() != 0;
+        let spsel = if in_handler_mode {
+            // ARMv7-M uses MSP for exception entry while already in handler mode.
+            false
+        } else {
+            control_reg & (1 << 1) != 0
+        };
         let fpca = control_reg & (2 << 1) != 0;
 
         trace!("Running interrupt irq={} spsel={} fpca={} vector={:#08x}",
@@ -156,9 +173,8 @@ impl Nvic {
         //   0xFFFF_FFF9   Thread mode    Main         Basic
         //   0xFFFF_FFFD   Thread mode    Process      Basic
 
-        // Right now, we don't supposed nested interrupts.
-        let mut lr: u32 = 0xFFFF_FFE9;
-        if spsel { lr |= 0b0000_0100; }
+        let mut lr: u32 = if in_handler_mode { 0xFFFF_FFE1 } else { 0xFFFF_FFE9 };
+        if !in_handler_mode && spsel { lr |= 0b0000_0100; }
         if !fpca { lr |= 0b0001_0000; } // Yes, no fpca means the bit is set
         uc.reg_write(RegisterARM::LR, lr.into()).unwrap();
 
@@ -166,7 +182,7 @@ impl Nvic {
         uc.reg_write(RegisterARM::IPSR, exception_number).unwrap();
         uc.reg_write(RegisterARM::PC, vector as u64).unwrap();
 
-        self.in_interrupt = true;
+        self.active_exceptions = self.active_exceptions.saturating_add(1);
     }
 
     pub fn return_from_interrupt(&mut self, sys: &System) {
@@ -198,7 +214,7 @@ impl Nvic {
                 spsel, fpca, uc.reg_read(RegisterARM::PC).unwrap());
         }
 
-        self.in_interrupt = false;
+        self.active_exceptions = self.active_exceptions.saturating_sub(1);
     }
 
     const CONTEXT_REGS_EXTENDED: [RegisterARM; 17] = [
@@ -280,11 +296,58 @@ impl Nvic {
 }
 
 impl Peripheral for Nvic {
-    fn read(&mut self, _sys: &System, _offset: u32) -> u32 {
-        0
+    fn read(&mut self, _sys: &System, offset: u32) -> u32 {
+        match offset {
+            // ISER0..ISER3
+            0x0000..=0x000c => {
+                let idx = (offset / 4) as u32;
+                ((self.enabled >> (idx * 32)) & 0xFFFF_FFFF) as u32
+            }
+            // ICER0..ICER3 reflects enable state too
+            0x0080..=0x008c => {
+                let idx = ((offset - 0x80) / 4) as u32;
+                ((self.enabled >> (idx * 32)) & 0xFFFF_FFFF) as u32
+            }
+            // ISPR0..ISPR3
+            0x0100..=0x010c => {
+                let idx = ((offset - 0x100) / 4) as u32;
+                let ext_pending = self.pending >> IRQ_OFFSET;
+                ((ext_pending >> (idx * 32)) & 0xFFFF_FFFF) as u32
+            }
+            // ICPR0..ICPR3 reflects pending state
+            0x0180..=0x018c => {
+                let idx = ((offset - 0x180) / 4) as u32;
+                let ext_pending = self.pending >> IRQ_OFFSET;
+                ((ext_pending >> (idx * 32)) & 0xFFFF_FFFF) as u32
+            }
+            _ => 0,
+        }
     }
 
-    fn write(&mut self, _sys: &System, _offset: u32, _value: u32) {
+    fn write(&mut self, _sys: &System, offset: u32, value: u32) {
+        match offset {
+            // ISER0..ISER3
+            0x0000..=0x000c => {
+                let idx = (offset / 4) as u32;
+                self.enabled |= (value as u128) << (idx * 32);
+            }
+            // ICER0..ICER3
+            0x0080..=0x008c => {
+                let idx = ((offset - 0x80) / 4) as u32;
+                self.enabled &= !((value as u128) << (idx * 32));
+            }
+            // ISPR0..ISPR3
+            0x0100..=0x010c => {
+                let idx = ((offset - 0x100) / 4) as u32;
+                self.pending |= (value as u128) << (IRQ_OFFSET as u32 + idx * 32);
+            }
+            // ICPR0..ICPR3
+            0x0180..=0x018c => {
+                let idx = ((offset - 0x180) / 4) as u32;
+                self.pending &= !((value as u128) << (IRQ_OFFSET as u32 + idx * 32));
+            }
+            _ => {}
+        }
     }
 }
 

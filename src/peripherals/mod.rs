@@ -18,7 +18,9 @@ pub mod dma;
 pub mod fsmc;
 pub mod i2c;
 pub mod nvic;
+pub mod otg_fs;
 pub mod scb;
+pub mod core_debug;
 pub mod sw_spi;
 pub mod tim;
 
@@ -32,7 +34,9 @@ use dma::*;
 use fsmc::*;
 use i2c::*;
 use nvic::*;
+use otg_fs::*;
 use scb::*;
+use core_debug::*;
 use sw_spi::*;
 use tim::*;
 
@@ -51,6 +55,7 @@ pub struct Peripherals {
     debug_peripherals: Vec<PeripheralSlot<GenericPeripheral>>,
     peripherals: Vec<PeripheralSlot<RefCell<Box<dyn Peripheral>>>>,
     pub nvic: RefCell<Nvic>,
+    pub core_debug: RefCell<CoreDebug>,
     pub gpio: RefCell<GpioPorts>,
 }
 
@@ -93,6 +98,7 @@ impl Peripherals {
             .or_else(||         Rcc::new(&name))
             .or_else(||         I2c::new(&name))
             .or_else(||         Dma::new(&name))
+            .or_else(||       OtgFs::new(&name))
             .or_else(||         Tim::new(&name))
             .or_else(||         Spi::new(&name, ext_devices))
         ;
@@ -169,6 +175,10 @@ impl Peripherals {
     }
 
     pub fn addr_desc(&self, addr: u32) -> String {
+        if self.core_debug.borrow().handles(addr) {
+            return format!("addr=0x{:08x} peri=CoreDebug {}", addr, self.core_debug.borrow().reg_name(addr));
+        }
+
         if let Some(p) = Self::get_peripheral(&self.debug_peripherals, addr) {
             format!("addr=0x{:08x} peri={} {}", addr, p.peripheral.name, p.peripheral.reg_name(addr - p.start))
         } else {
@@ -214,7 +224,9 @@ impl Peripherals {
 
         assert!(byte_offset + size <= 4);
 
-        let value = if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
+        let value = if self.core_debug.borrow().handles(addr) {
+            self.core_debug.borrow_mut().read(sys, addr)
+        } else if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
             p.peripheral.borrow_mut().read(sys, addr - p.start) << (8*byte_offset)
         } else {
             0
@@ -249,7 +261,9 @@ impl Peripherals {
             value = (value << 8*byte_offset) | (v & (0xFFFF_FFFF >> (32-8*byte_offset)));
         }
 
-        if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
+        if self.core_debug.borrow().handles(addr) {
+            self.core_debug.borrow_mut().write(sys, addr, value);
+        } else if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
             p.peripheral.borrow_mut().write(sys, addr - p.start, value)
         }
 
@@ -259,6 +273,7 @@ impl Peripherals {
     }
 
     pub fn step(&self, sys: &System) {
+        self.core_debug.borrow_mut().step(sys);
         for peripheral in &self.peripherals {
             peripheral.peripheral.borrow_mut().step(sys);
         }

@@ -40,6 +40,27 @@ impl Dma {
             self.hisr |= bit;
         }
     }
+
+    fn stream_irq(&self, stream: usize) -> Option<i32> {
+        // STM32F427 IRQ numbers for DMA stream interrupts.
+        // DMA1 Stream0..6 -> 11..17
+        // DMA2 Stream0..4 -> 56..60, Stream5..7 -> 68..70
+        match self.name.as_str() {
+            "DMA1" => Some(11 + stream as i32),
+            "DMA2" => Some(match stream {
+                0 => 56,
+                1 => 57,
+                2 => 58,
+                3 => 59,
+                4 => 60,
+                5 => 68,
+                6 => 69,
+                7 => 70,
+                _ => return None,
+            }),
+            _ => None,
+        }
+    }
 }
 
 impl Peripheral for Dma {
@@ -64,6 +85,12 @@ impl Peripheral for Dma {
             Access::StreamReg(i, offset) => {
                 if self.streams[i].write(&self.name, sys, offset, value) {
                     self.set_tcif(i);
+
+                    if self.streams[i].tcie_enabled() {
+                        if let Some(irq) = self.stream_irq(i) {
+                            sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                        }
+                    }
                 }
             }
         }
@@ -82,6 +109,10 @@ struct Stream {
 }
 
 impl Stream {
+    fn tcie_enabled(&self) -> bool {
+        self.cr & (1 << 4) != 0
+    }
+
     fn channel(&self) -> u8 {
         ((self.cr >> 25) & 0b111) as u8
     }
