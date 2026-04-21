@@ -228,6 +228,9 @@ impl Peripherals {
             self.core_debug.borrow_mut().read(sys, addr)
         } else if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
             p.peripheral.borrow_mut().read(sys, addr - p.start) << (8*byte_offset)
+        } else if (0x5000_1000..0x5000_4000).contains(&addr) {
+            // OTG FS data FIFO region (EP0-EP3 pop-on-read, 0x1000 bytes per EP).
+            otg_fs::fifo_read(((addr - 0x5000_1000) / 0x1000) as usize) << (8*byte_offset)
         } else {
             0
         };
@@ -265,6 +268,10 @@ impl Peripherals {
             self.core_debug.borrow_mut().write(sys, addr, value);
         } else if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
             p.peripheral.borrow_mut().write(sys, addr - p.start, value)
+        } else if (0x5000_1000..0x5000_5000).contains(&addr) {
+            // OTG FS data FIFO region write (EP0-EP3 TX, 0x1000 bytes per EP).
+            // EP1 = CDC bulk IN (console output), EP2 = CDC interrupt IN.
+            otg_fs::fifo_write(((addr - 0x5000_1000) / 0x1000) as usize, value);
         }
 
         if crate::verbose() >= 3 {

@@ -130,7 +130,9 @@ struct OtgFsState {
     ep0_pending_setup: [u32; 2],
     ep0_fifo_read_count: u8,
     ep0_in_transfer_pending: bool,
+    ep_in_transfer_pending: [bool; EP_COUNT], // for EP1..3 (CDC bulk/interrupt)
     enum_stage: UsbEnumStage,
+    cdc_line_buf: Vec<u8>,
 }
 
 pub struct OtgFs {
@@ -314,6 +316,11 @@ impl OtgFsState {
         if value & DIEPCTL_EPENA != 0 {
             if ep == 0 {
                 self.ep0_in_transfer_pending = true;
+            } else {
+                otg_debug!("DIEPCTL{ep} EPENA set dieptsiz={:#010x} diepempmsk={:#010x}", self.dieptsiz[ep], self.diepempmsk);
+                if ep < EP_COUNT {
+                    self.ep_in_transfer_pending[ep] = true;
+                }
             }
 
             if self.diepempmsk & (1 << ep) != 0 {
@@ -616,6 +623,18 @@ impl Peripheral for OtgFs {
             }
         }
 
+        // Fire XFRC for non-EP0 IN endpoints (CDC bulk/interrupt) after EPENA is set.
+        // The firmware waits for XFRC before queuing the next TX packet.
+        for ep in 1..EP_COUNT {
+            if shared.ep_in_transfer_pending[ep] && shared.diepctl[ep] & DIEPCTL_EPENA != 0 {
+                shared.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+                shared.mark_in_endpoint_interrupt(ep, DIEPINT_XFRC);
+                shared.diepctl[ep] &= !DIEPCTL_EPENA;
+                shared.ep_in_transfer_pending[ep] = false;
+                shared.irq_latched = false; // ensure IEPINT wakes the ISR
+            }
+        }
+
         if shared.gahbcfg & GAHBCFG_GINT == 0 || shared.masked_interrupts() == 0 {
             shared.irq_latched = false;
         } else if !shared.irq_latched {
@@ -640,6 +659,42 @@ pub fn fifo_read(_ep: usize) -> u32 {
             word
         } else {
             0
+        }
+    })
+}
+
+/// Write one word to the OTG FS EP TX FIFO (address base 0x50001000 + ep*0x1000).
+/// Called from Peripherals::write when firmware writes bulk IN data during CDC transmission.
+/// EP1 is the CubeBlack CDC data bulk IN endpoint (console output).
+pub fn fifo_write(ep: usize, word: u32) {
+    // Only capture EP1 (CDC data bulk IN = console) and EP2 (CDC interrupt IN).
+    // EP0 TX FIFO is used for control responses (descriptors, ZLPs) — skip those.
+    if ep == 0 {
+        return;
+    }
+    OTG_FS_SHARED.with(|shared| {
+        let mut s = shared.borrow_mut();
+        // Accumulate bytes into the cdc_rx buffer, flush on newline.
+        let bytes = word.to_le_bytes();
+        for &b in &bytes {
+            if b == b'\n' || b == b'\r' || b == 0 {
+                // Flush on LF, CR, or null (end-of-transfer padding).
+                if !s.cdc_line_buf.is_empty() {
+                    let line = String::from_utf8_lossy(&s.cdc_line_buf);
+                    let line_owned = line.trim().to_string();
+                    if !line_owned.is_empty() {
+                        info!("USB-CDC ep{} '{}'", ep, line_owned);
+                    }
+                    s.cdc_line_buf.clear();
+                }
+            } else {
+                s.cdc_line_buf.push(b);
+                if s.cdc_line_buf.len() >= 256 {
+                    let line = String::from_utf8_lossy(&s.cdc_line_buf);
+                    info!("USB-CDC ep{} '{}'", ep, line.trim());
+                    s.cdc_line_buf.clear();
+                }
+            }
         }
     })
 }
