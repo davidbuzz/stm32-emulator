@@ -79,6 +79,7 @@ impl Tim {
         if (self.dier & (1 << 1)) != 0 && self.cnt >= self.ccr1 {
             self.sr |= 1 << 1;
             if let Some(irq) = self.irq_number() {
+                debug!("{} CC1 compare fired cnt=0x{:08x} ccr1=0x{:08x} -> IRQ {}", self.name, self.cnt, self.ccr1, irq);
                 sys.p.nvic.borrow_mut().set_intr_pending(irq);
             }
         }
@@ -119,14 +120,32 @@ impl Peripheral for Tim {
         self.tick(sys);
 
         match offset {
-            0x0000 => self.cr1 = value,
-            0x000c => self.dier = value,
+            0x0000 => {
+                debug!("{} write CR1=0x{:08x}", self.name, value);
+                self.cr1 = value;
+            }
+            0x000c => {
+                debug!("{} write DIER=0x{:08x}", self.name, value);
+                self.dier = value;
+            }
             // Firmware often clears status flags by writing 0.
             0x0010 => self.sr &= value,
-            0x0024 => self.cnt = value,
-            0x0028 => self.psc = value,
-            0x002c => self.arr = value,
-            0x0034 => self.ccr1 = value,
+            0x0024 => {
+                debug!("{} write CNT=0x{:08x}", self.name, value);
+                self.cnt = value;
+            }
+            0x0028 => {
+                debug!("{} write PSC=0x{:08x}", self.name, value);
+                self.psc = value;
+            }
+            0x002c => {
+                debug!("{} write ARR=0x{:08x}", self.name, value);
+                self.arr = value;
+            }
+            0x0034 => {
+                debug!("{} write CCR1=0x{:08x} (cnt=0x{:08x})", self.name, value, self.cnt);
+                self.ccr1 = value;
+            }
             _ => {}
         }
     }

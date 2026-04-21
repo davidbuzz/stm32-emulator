@@ -99,6 +99,8 @@ impl ExtDevice<(), u8> for Ramtron {
             // While sending a reply (e.g. RDID response), MOSI is dummy bytes — ignore writes.
             // Real SPI FRAM hardware ignores MOSI during the response phase.
             State::SendingReply(data) => State::SendingReply(data),
+            // While reading data, MOSI is dummy bytes — stay in ReadData state and ignore writes.
+            State::ReadData { addr } => State::ReadData { addr },
             State::CollectingArgs { cmd, mut args } => {
                 args.push(v);
                 self.collect(cmd, args)

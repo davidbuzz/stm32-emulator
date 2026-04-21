@@ -182,6 +182,9 @@ impl Nvic {
     // FPCA, bit[2], if the processor includes the FP extension.
 
     pub fn run_interrupt(&mut self, sys: &System, irq: i32) {
+        if irq == 67 || irq == 50 {
+            debug!("NVIC dispatching IRQ {} vector={:#08x}", irq, Self::read_vector_addr(sys, self.vector_table_addr, irq));
+        }
         let vector = Self::read_vector_addr(sys, self.vector_table_addr, irq);
 
         let mut uc = sys.uc.borrow_mut();
@@ -362,11 +365,13 @@ impl Peripheral for Nvic {
             // ISER0..ISER3
             0x0000..=0x000c => {
                 let idx = (offset / 4) as u32;
+                debug!("NVIC ISER{} write value={:#010x} (enables irqs {}-{})", idx, value, idx*32, idx*32+31);
                 self.enabled |= (value as u128) << (idx * 32);
             }
             // ICER0..ICER3
             0x0080..=0x008c => {
                 let idx = ((offset - 0x80) / 4) as u32;
+                debug!("NVIC ICER{} write value={:#010x} (disables irqs {}-{})", idx, value, idx*32, idx*32+31);
                 self.enabled &= !((value as u128) << (idx * 32));
             }
             // ISPR0..ISPR3

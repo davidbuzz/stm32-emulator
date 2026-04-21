@@ -201,6 +201,7 @@ impl OtgFsState {
             && self.gintmsk != 0
             && self.gahbcfg & GAHBCFG_GINT != 0
         {
+            info!("OTG_FS: USB enumeration starting (gccfg={:#x} gintmsk={:#x} gahbcfg={:#x})", self.gccfg, self.gintmsk, self.gahbcfg);
             self.startup_stage = StartupStage::UsbReset;
             self.event_delay = OTG_STARTUP_EVENT_DELAY;
             self.sof_delay = OTG_SOF_PERIOD;
@@ -314,11 +315,16 @@ impl OtgFsState {
 
         self.diepctl[ep] = reg;
 
+        if ep > 0 && value & DIEPCTL_USBAEP != 0 && self.diepctl[ep] & DIEPCTL_USBAEP != 0 {
+            info!("OTG_FS: EP{} USBAEP set (endpoint enabled/configured)", ep);
+        }
+
         if value & DIEPCTL_EPENA != 0 {
             if ep == 0 {
                 self.ep0_in_transfer_pending = true;
             } else {
                 otg_debug!("DIEPCTL{ep} EPENA set dieptsiz={:#010x} diepempmsk={:#010x}", self.dieptsiz[ep], self.diepempmsk);
+                info!("OTG_FS: EP{} EPENA set (CDC endpoint activated)", ep);
                 if ep < EP_COUNT {
                     self.ep_in_transfer_pending[ep] = true;
                     self.ep_txfe_was_fired[ep] = false;
@@ -366,6 +372,9 @@ impl OtgFsState {
                     0x08 => self.clear_in_endpoint_interrupt(ep, value),
                     0x10 => {
                         if ep < EP_COUNT {
+                            if ep > 0 {
+                                info!("OTG_FS: EP{} DIEPTSIZ write value={:#010x} (usb_lld_start_in)", ep, value);
+                            }
                             self.dieptsiz[ep] = value;
                         }
                     }
@@ -569,6 +578,7 @@ impl Peripheral for OtgFs {
                     if shared.sof_delay > 0 {
                         shared.sof_delay -= 1;
                     } else {
+                        otg_debug!("SOF injected (gintmsk={:#010x} gintsts_before={:#010x} irq_latched={})", shared.gintmsk, shared.gintsts, shared.irq_latched);
                         shared.inject_startup_event(GINTSTS_SOF);
                         shared.sof_delay = OTG_SOF_PERIOD;
                     }
@@ -588,6 +598,7 @@ impl Peripheral for OtgFs {
                 _ => None,
             };
             if let Some(pkt) = maybe_pkt {
+                info!("OTG_FS: delivering {} SETUP packet to EP0", if pkt == SETUP_SET_ADDRESS { "SetAddress" } else { "SetConfig" });
                 shared.ep0_pending_setup = pkt;
                 shared.ep0_rx_state = Ep0RxState::RxFlvlStatusPending;
                 shared.gintsts |= GINTSTS_RXFLVL;
@@ -621,8 +632,14 @@ impl Peripheral for OtgFs {
             shared.ep0_in_transfer_pending = false;
             // Advance USB enumeration stage after each EP0 IN transfer completes.
             match shared.enum_stage {
-                UsbEnumStage::DeliverSetAddress => shared.enum_stage = UsbEnumStage::DeliverSetConfig,
-                UsbEnumStage::DeliverSetConfig  => shared.enum_stage = UsbEnumStage::Configured,
+                UsbEnumStage::DeliverSetAddress => {
+                    info!("OTG_FS: SetAddress ZLP done → DeliverSetConfig");
+                    shared.enum_stage = UsbEnumStage::DeliverSetConfig;
+                }
+                UsbEnumStage::DeliverSetConfig  => {
+                    info!("OTG_FS: SetConfig ZLP done → Configured");
+                    shared.enum_stage = UsbEnumStage::Configured;
+                }
                 _ => {}
             }
         }
@@ -690,6 +707,7 @@ pub fn fifo_read(_ep: usize) -> u32 {
 pub fn fifo_write(ep: usize, word: u32) {
     // Only capture EP1 (CDC data bulk IN = console) and EP2 (CDC interrupt IN).
     // EP0 TX FIFO is used for control responses (descriptors, ZLPs) — skip those.
+    debug!("OTG FIFO write ep={} word=0x{:08x}", ep, word);
     if ep == 0 {
         return;
     }

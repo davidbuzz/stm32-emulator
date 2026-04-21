@@ -154,6 +154,16 @@ patches:
   # NOP systick delay
   - start: 0x08051ee8
     data: [0x70, 0x47]
+  # NOP the two osalThreadSleepMicroseconds(10000) calls in SDIO ACMD41 retry loop.
+  # Each BL is 4 bytes (T1+T2 halfwords); replace with two Thumb16 NOPs (0x00 0xBF each).
+  # SDC_INIT_RETRY=100 x 2 branch paths x 10ms = 200 x 10ms = ~333M wasted instructions.
+  # Call site 1 (CMD1 path): 0x0815772a
+  - start: 0x0815772a
+    data: [0x00, 0xbf, 0x00, 0xbf]
+  # Call site 2 (ACMD41 path): 0x08157762
+  - start: 0x08157762
+    data: [0x00, 0xbf, 0x00, 0xbf]
+
   # Nop the fpga not being there
   #- start: 0x08041F92
   #  data: [0x00, 0xbf]
