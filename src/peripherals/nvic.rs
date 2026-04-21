@@ -9,6 +9,7 @@ use super::Peripheral;
 
 #[derive(Default)]
 pub struct Nvic {
+    pub vector_table_addr: u32,
     pub systick_period: Option<u32>,
     pub last_systick_trigger: u64,
 
@@ -36,6 +37,27 @@ impl Nvic {
         self.pending |= 1 << (IRQ_OFFSET + irq);
     }
 
+    pub fn clear_intr_pending(&mut self, irq: i32) {
+        let bit = IRQ_OFFSET + irq;
+        assert!(bit > 0);
+        self.pending &= !(1 << (IRQ_OFFSET + irq));
+    }
+
+    pub fn is_intr_pending(&self, irq: i32) -> bool {
+        let bit = IRQ_OFFSET + irq;
+        assert!(bit > 0);
+        (self.pending & (1 << (IRQ_OFFSET + irq))) != 0
+    }
+
+    pub fn next_pending_intr(&self) -> Option<i32> {
+        if self.pending != 0 {
+            let bit = self.pending.trailing_zeros();
+            Some((bit as i32) - IRQ_OFFSET)
+        } else {
+            None
+        }
+    }
+
     pub fn get_and_clear_next_intr_pending(&mut self) -> Option<i32> {
         if self.pending != 0 {
             let bit = self.pending.trailing_zeros();
@@ -52,6 +74,12 @@ impl Nvic {
             let n = crate::emulator::NUM_INSTRUCTIONS.load(Ordering::Relaxed);
             let delta_num_instructions = n - self.last_systick_trigger;
             if delta_num_instructions > (systick_period as u64) {
+                trace!(
+                    "SysTick matured n={} delta={} period={}",
+                    n,
+                    delta_num_instructions,
+                    systick_period
+                );
                 self.last_systick_trigger = n;
                 self.set_intr_pending(irq::SYSTICK);
             }
@@ -63,15 +91,21 @@ impl Nvic {
         primask != 0
     }
 
-    pub fn run_pending_interrupts(&mut self, sys: &System, vector_table_addr: u32) {
+    pub fn run_pending_interrupts(&mut self, sys: &System) {
         self.maybe_set_systick_intr_pending();
 
         if Self::are_interrupts_disabled(sys) || self.in_interrupt {
+            trace!(
+                "Interrupt dispatch blocked primask={} in_interrupt={} pending=0x{:032x}",
+                sys.uc.borrow().reg_read(RegisterARM::PRIMASK).unwrap(),
+                self.in_interrupt,
+                self.pending
+            );
             return;
         }
 
         if let Some(irq) = self.get_and_clear_next_intr_pending() {
-            self.run_interrupt(sys, vector_table_addr, irq);
+            self.run_interrupt(sys, irq);
         }
     }
 
@@ -87,8 +121,8 @@ impl Nvic {
     // SPSEL, bit[1], 0 means we use MSP, 1 means we use PSP.
     // FPCA, bit[2], if the processor includes the FP extension.
 
-    fn run_interrupt(&mut self, sys: &System, vector_table_addr: u32, irq: i32) {
-        let vector = Self::read_vector_addr(sys, vector_table_addr, irq);
+    fn run_interrupt(&mut self, sys: &System, irq: i32) {
+        let vector = Self::read_vector_addr(sys, self.vector_table_addr, irq);
 
         let mut uc = sys.uc.borrow_mut();
 

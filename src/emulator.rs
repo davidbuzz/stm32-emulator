@@ -79,6 +79,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
     let vector_table_addr = config.cpu.vector_table;
 
     let (sys, framebuffers) = crate::system::prepare(&mut uc, config, svd_device)?;
+    sys.p.nvic.borrow_mut().vector_table_addr = vector_table_addr;
 
     let diassembler = Capstone::new()
         .arm()
@@ -107,8 +108,12 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     let r5 = uc.reg_read(RegisterARM::R5).unwrap_or(0);
                     let r6 = uc.reg_read(RegisterARM::R6).unwrap_or(0);
                     let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
-                    info!("Busy loop reached pc=0x{:08x} sp=0x{:08x} lr=0x{:08x} r0=0x{:08x} r1=0x{:08x} r2=0x{:08x} r3=0x{:08x} r4=0x{:08x} r5=0x{:08x} r6=0x{:08x} r7=0x{:08x}",
-                        pc, sp, lr, r0, r1, r2, r3, r4, r5, r6, r7);
+                    let primask = uc.reg_read(RegisterARM::PRIMASK).unwrap_or(0);
+                    let basepri = uc.reg_read(RegisterARM::BASEPRI).unwrap_or(0);
+                    let control = uc.reg_read(RegisterARM::CONTROL).unwrap_or(0);
+                    let ipsr = uc.reg_read(RegisterARM::IPSR).unwrap_or(0);
+                    info!("Busy loop reached pc=0x{:08x} sp=0x{:08x} lr=0x{:08x} r0=0x{:08x} r1=0x{:08x} r2=0x{:08x} r3=0x{:08x} r4=0x{:08x} r5=0x{:08x} r6=0x{:08x} r7=0x{:08x} primask=0x{:08x} basepri=0x{:08x} control=0x{:08x} ipsr=0x{:08x}",
+                        pc, sp, lr, r0, r1, r2, r3, r4, r5, r6, r7, primask, basepri, control, ipsr);
                     if r1 != 0 {
                         let mut buf = [0u8; 64];
                         if uc.mem_read(r1, &mut buf).is_ok() {
@@ -154,9 +159,11 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                 info!("{}", disassemble_instruction(&diassembler, uc, pc));
             }
 
+            let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
+            p.step(&sys);
+
             if n % interrupt_period as u64 == 0 {
-                let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
-                p.nvic.borrow_mut().run_pending_interrupts(&sys, vector_table_addr);
+                p.nvic.borrow_mut().run_pending_interrupts(&sys);
             }
 
             if n & PUMP_EVENT_INST_INTERVAL == 0 {
@@ -203,7 +210,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     // Return from interrupt
                     let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
                     p.nvic.borrow_mut().return_from_interrupt(&sys);
-                    p.nvic.borrow_mut().run_pending_interrupts(&sys, vector_table_addr);
+                    p.nvic.borrow_mut().run_pending_interrupts(&sys);
                 }
                 3 => {
                     error!("intr_hook intno={:08x}", exception);

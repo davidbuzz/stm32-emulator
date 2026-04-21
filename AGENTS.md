@@ -8,11 +8,18 @@ Repository guidance for AI coding agents working in this project.
 - Current focus board: CubeBlack (STM32F427) and ArduPilot binaries in cubeblack/.
 - Treat behavioral correctness as higher priority than perfect hardware cycle accuracy.
 
+## Current end goal
+
+- Current deliverable: get the CubeBlack target to boot and run ArduPilot firmware in the emulator with no firmware-side bypasses required for normal startup.
+- When deciding what to work on next, prefer tasks that remove the highest-confidence blocker preventing demonstrable CubeBlack boot progress.
+- Treat `FEATURE_GAP.md` as the canonical backlog and handover document for remaining work toward this deliverable.
+
 ## First steps on each task
 
 - Read the active board config before changing emulator behavior.
 - Reproduce current behavior with a bounded run before editing code.
 - Capture concrete evidence: instruction count reached, stop PC, and warning classes.
+- When choosing the next task, consult `FEATURE_GAP.md` first; this is the primary backlog and the default place to look for more work.
 
 ## Known working run commands
 
@@ -75,6 +82,13 @@ Use these local docs as the source of truth for register behavior and memory lay
 - Avoid destructive git operations.
 - Keep commits focused and small.
 - Prefer targeted patches over broad cleanup.
+
+## Todo list requirements
+
+- When maintaining a TODO list for work in this repo, always end it with these final items in this order:
+  - `git commit your changes`
+  - `refer to FEATURE_GAP.md afterwards to get more work to do`
+- After completing the current task, use `FEATURE_GAP.md` as the default source for identifying the next useful piece of work.
 
 ## Done criteria for boot tasks
 

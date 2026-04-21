@@ -15,6 +15,7 @@ pub struct Tim {
     arr: u32,
     ccr1: u32,
     last_clk: u64,
+    psc_accum: u64,
 }
 
 impl Tim {
@@ -53,7 +54,17 @@ impl Tim {
         }
 
         let step = self.psc.saturating_add(1);
-        self.cnt = self.cnt.wrapping_add(delta / step.max(1));
+        self.psc_accum = self.psc_accum.saturating_add(delta as u64);
+
+        let step = step.max(1) as u64;
+        let ticks = (self.psc_accum / step) as u32;
+        self.psc_accum %= step;
+
+        if ticks == 0 {
+            return;
+        }
+
+        self.cnt = self.cnt.wrapping_add(ticks);
 
         // Minimal compare behavior used by polling/timeout loops.
         if (self.dier & (1 << 1)) != 0 && self.cnt >= self.ccr1 {
@@ -76,6 +87,10 @@ impl Tim {
 }
 
 impl Peripheral for Tim {
+    fn step(&mut self, sys: &System) {
+        self.tick(sys);
+    }
+
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
         self.tick(sys);
 

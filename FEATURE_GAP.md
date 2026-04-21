@@ -2,6 +2,12 @@
 
 This file tracks emulator features that are known to be incomplete or not yet implemented.
 
+## Current deliverable
+
+- End goal: get the CubeBlack target to boot and run ArduPilot firmware under the emulator with realistic emulator-side behavior, rather than relying on firmware-side startup bypasses.
+- This document is the primary backlog and technical handover for work that remains between the current emulator state and that deliverable.
+- Prefer items that unblock demonstrable CubeBlack boot progress first, then follow-on correctness and hardware coverage work.
+
 ## Recently Fixed Items
 
 | Feature | Status | Notes/Technical Issues |
@@ -20,6 +26,8 @@ This file tracks emulator features that are known to be incomplete or not yet im
 | DMA transfer-complete flag and clear semantics added | Implemented | `src/peripherals/dma.rs` now tracks `lisr`/`hisr`, sets `TCIF` on completed transfers, and clears flags via `LIFCR`/`HIFCR`, matching the STM32F4 polling model more closely. |
 | NVIC stack-pointer restore and IPSR numbering fixed | Implemented | `src/peripherals/nvic.rs` now writes back the selected stack pointer register (`MSP` or `PSP`) instead of always `SP`, and writes architectural exception numbers into `IPSR` using `16 + irq`. |
 | Minimal general/basic TIM timebase added | Partially Implemented | `src/peripherals/tim.rs` provides a small stub for `TIM5`, `TIM6`, and `TIM7` with `CR1`, `DIER`, `SR`, `CNT`, `PSC`, `ARR`, and `CCR1`. This is enough for some polling and timeout loops, but it is not a full advanced TIM implementation. |
+| Core SCB state and dynamic VTOR handling added | Implemented | `src/peripherals/scb.rs` now exposes basic Cortex-M4 `SCB` state including `CPUID`, `ICSR`, `VTOR`, `AIRCR`, `SHPRx`, and fault-status registers, while `src/peripherals/nvic.rs` now dispatches exceptions through the active `VTOR` instead of a fixed config-time vector table address. |
+| Free-running TIM stepping and TIM5 compare wakeup fixed | Implemented | Timers now advance from the emulator main loop instead of only on MMIO access, and `src/peripherals/tim.rs` preserves prescaler remainder across steps. This allows the firmware-configured `TIM5` compare interrupt to fire after the initial idle-loop park, which was previously impossible because the counter froze once the firmware stopped polling it. |
 | Busy-loop diagnostic capture added | Implemented | `src/emulator.rs` now logs `PC`, `SP`, `LR`, `R0-R7`, context words, and the restore frame when `--busy-loop-stop` triggers, which made the current scheduler hand-off failure traceable. |
 | USART probe line flushing improved | Implemented | `src/ext_devices/usart_probe.rs` now flushes on both CR and LF and also flushes long buffered output, improving visibility of firmware text output during boot debugging. |
 | CubeBlack run script hardened for local environments | Implemented | `cubeblack/run.sh` now sources Cargo environment when present and falls back to the built release binary, reducing local setup friction. |
@@ -28,9 +36,9 @@ This file tracks emulator features that are known to be incomplete or not yet im
 
 | Feature | Status | Notes/Technical Issues |
 | --- | --- | --- |
-| Scheduler dispatch still lands in firmware panic loop at `0x08161148` | Unimplemented | `--busy-loop-stop` consistently stops around instruction count `0x00308077` with `pc=0x08161148`, `lr=0x0800544b`, and restored `r4=0x08161149`. Disassembly shows `0x08161148` is an intentional infinite loop, reached via the context-switch trampoline at `0x08005428..0x08005448`. |
-| Root cause of runnable thread entry selection remains unresolved | Unimplemented | The restored frame shows the scheduler/context restore path is selecting `0x08161149` as the function entry for a dispatched context. Memory-map, DMA, NVIC, and minimal timer fixes did not eliminate this path, so the remaining issue is likely higher-level scheduler/thread-init state or another missing peripheral semantic. |
-| Validation snapshot for current state | Partially Implemented | After the memory-map fixes, bounded long runs reached 20M and 100M instructions without the earlier unmapped CCM/SYSMEM warnings. A focused `--busy-loop-stop` run still reproduces the same loop, so stability improved but functional boot is not yet complete. |
+| `--busy-loop-stop` still trips on an early idle-thread loop before timer wakeup | Partially Implemented | The first repeated PC is still `0x08161148` around instruction count `0x00308077`, but this is no longer a terminal stall. With free-running timer stepping enabled, `TIM5` later raises IRQ 50 and execution resumes out of that loop. For this target, `--busy-loop-stop` is now a misleading probe unless paired with interrupt traces. |
+| Cortex-M debug/timing blocks remain mostly unmodeled | Unimplemented | Firmware writes to `DEMCR` at `0xE000EDFC` and `DWT` registers around `0xE0001000` during scheduler/timer initialization. Those accesses are currently tolerated but not modeled, so any code that depends on DWT cycle counting or debug-trigger side effects may still misbehave. |
+| Validation snapshot for current state | Partially Implemented | After the memory-map, DMA, NVIC, SCB, and timer progression fixes, bounded runs now remain stable to 20M and 100M instructions and no longer stay parked at `0x08161148`. A 5M trace shows `TIM5` raising IRQ 50 at `clk=0x00433914`, with the interrupt vector dispatching and returning successfully, but full functional boot is still not demonstrated. |
 
 ## Advanced TIM Peripheral
 

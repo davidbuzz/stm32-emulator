@@ -248,11 +248,19 @@ impl Peripherals {
             trace!("write: {} write=0x{:08x}", self.addr_desc(addr), value);
         }
     }
+
+    pub fn step(&self, sys: &System) {
+        for peripheral in &self.peripherals {
+            peripheral.peripheral.borrow_mut().step(sys);
+        }
+    }
 }
 
 pub trait Peripheral {
     fn read(&mut self, sys: &System, offset: u32) -> u32;
     fn write(&mut self, sys: &System, offset: u32, value: u32);
+
+    fn step(&mut self, _sys: &System) {}
 
     fn read_dma(&mut self, sys: &System, offset: u32, size: usize) -> VecDeque<u8> {
         let mut v = VecDeque::with_capacity(size);

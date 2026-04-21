@@ -30,6 +30,12 @@ impl SysTick {
             None
         };
 
+        trace!(
+            "SysTick config ctl=0x{:08x} reload=0x{:08x} period={:?}",
+            self.ctl,
+            self.reload,
+            nvic_systick_period
+        );
         sys.p.nvic.borrow_mut().systick_period = nvic_systick_period;
     }
 }
@@ -55,11 +61,13 @@ impl Peripheral for SysTick {
         match offset {
             0x0000 => {
                 // CTRL register
+                trace!("SysTick write CTRL=0x{:08x}", value);
                 self.ctl = value;
                 self.set_nvic_systick_period(sys);
             }
             0x0004 => {
                 // LOAD register
+                trace!("SysTick write LOAD=0x{:08x}", value);
                 self.reload = value;
                 self.set_nvic_systick_period(sys);
             }
