@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: GPIOA..GPIOK (general-purpose I/O ports).
+// STM32F427 bases: GPIOA=0x40020000, then +0x400 per port through GPIOK.
+// Key registers: MODER, OTYPER, OSPEEDR, PUPDR, IDR, ODR, BSRR, AFRL, AFRH.
+// Key function: pin muxing and digital I/O for clocks, chip selects, LEDs, buses, and interrupts.
+// Critical for this emulator: many external devices and software SPI signals are driven through GPIO.
+// This model focuses on pin naming, port state, and reads/writes needed by current boards.
+// Still incomplete: alternate-function side effects and full EXTI-style interrupt plumbing.
+// Datasheet/reference anchor: STM32F4 RM GPIO chapter.
+
 use crate::system::System;
 use super::Peripheral;
 

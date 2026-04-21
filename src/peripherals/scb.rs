@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: SCB (System Control Block) for Cortex-M4.
+// Cortex-M private-peripheral base: 0xE000ED00.
+// Key registers: CPUID, ICSR, VTOR, AIRCR, SCR, CCR, SHPRx, SHCSR, CFSR, HFSR, CPACR.
+// Key function: exception control, vector-table selection, system handlers, and fault status.
+// Critical for this emulator: VTOR, ICSR, and system-handler state affect every interrupt path.
+// This model keeps just enough architectural state for firmware boot and exception routing.
+// Still incomplete: deep fault generation/escalation and many side effects of system control writes.
+// Datasheet/reference anchor: ARMv7-M SCB architecture as exposed on STM32F427.
+
 use crate::system::System;
 use super::{Peripheral, nvic::irq};
 

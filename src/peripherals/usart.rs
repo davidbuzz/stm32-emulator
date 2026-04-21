@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: USART1 / USART2 / USART3 / USART6 and UART4 / UART5 / UART7 / UART8.
+// STM32F427 bases: USART1=0x40011000, USART2=0x40004400, USART3=0x40004800, UART4=0x40004C00, UART5=0x40005000, USART6=0x40011400, UART7=0x40007800, UART8=0x40007C00.
+// Key registers: SR, DR, BRR, CR1, CR2, CR3, GTPR.
+// Key function: asynchronous serial links for telemetry, console, crash output, and board I/O.
+// Critical for this emulator: some boards use USART probes directly, while CubeBlack prefers USB CDC.
+// Current model persists core register state and forwards DR bytes to emulator external serial devices.
+// Still incomplete: realistic flag transitions, interrupt delivery, baud effects, and DMA-driven traffic.
+// Datasheet/reference anchor: STM32F4 RM USART/UART chapter.
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -11,16 +20,29 @@ use super::Peripheral;
 pub struct Usart {
     pub name: String,
     pub ext_device: Option<Rc<RefCell<dyn ExtDevice<(), u8>>>>,
+    sr: u32,
+    dr: u32,
+    brr: u32,
+    cr1: u32,
+    cr2: u32,
+    cr3: u32,
+    gtpr: u32,
 }
 
 impl Usart {
     pub fn new(name: &str, ext_devices: &ExtDevices) -> Option<Box<dyn Peripheral>> {
-        if name.starts_with("USART") {
+        if name.starts_with("USART") || name.starts_with("UART") {
             let ext_device = ext_devices.find_serial_device(&name);
             let name = ext_device.as_ref()
                 .map(|d| d.borrow_mut().connect_peripheral(name))
                 .unwrap_or_else(|| name.to_string());
-            Some(Box::new(Self { name, ext_device, ..Default::default() }))
+            Some(Box::new(Self {
+                name,
+                ext_device,
+                // Keep TXE/TC/RXNE/IDLE set by default to preserve existing boot behavior.
+                sr: (1 << 7) | (1 << 6) | (1 << 5) | (1 << 4),
+                ..Default::default()
+            }))
         } else {
             None
         }
@@ -30,38 +52,50 @@ impl Usart {
 impl Peripheral for Usart {
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
         match offset {
-            0x0000 => {
-                // SR register
-                // Bit 7 TXE: Transmit data register empty
-                // Bit 6 TC: Transmission complete
-                // Bit 5 RXNE: Read data register not empty
-                // Bit 4 IDLE: IDLE line detected
-                // We could do something smarter to indicate that there's data to read
-                (1 << 7) | (1 << 6) | (1 << 5) | (1 << 4)
-            }
+            0x0000 => self.sr,
             0x0004 => {
                 // DR register
-                let v = self.ext_device.as_ref().map(|d|
-                    d.borrow_mut().read(sys, ())
-                ).unwrap_or_default() as u32;
+                let v = self.ext_device.as_ref()
+                    .map(|d| d.borrow_mut().read(sys, ()))
+                    .unwrap_or(self.dr as u8) as u32;
+
+                self.dr = v;
 
                 trace!("{} read={:02x}", self.name, v);
                 v
             }
+            0x0008 => self.brr,
+            0x000c => self.cr1,
+            0x0010 => self.cr2,
+            0x0014 => self.cr3,
+            0x0018 => self.gtpr,
             _ => 0
         }
     }
 
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
         match offset {
+            0x0000 => {
+                // SR is mostly status/RWC; preserve existing bits for now.
+                self.sr = value;
+            }
             0x0004 => {
                 // DR register
+                self.dr = value & 0xFF;
                 self.ext_device.as_ref().map(|d|
                     d.borrow_mut().write(sys, (), value as u8)
                 );
 
+                // TX is complete immediately in this minimal model.
+                self.sr |= (1 << 7) | (1 << 6);
+
                 trace!("{} write={:02x}", self.name, value as u8);
             }
+            0x0008 => self.brr = value,
+            0x000c => self.cr1 = value,
+            0x0010 => self.cr2 = value,
+            0x0014 => self.cr3 = value,
+            0x0018 => self.gtpr = value,
             _ => {}
         }
     }

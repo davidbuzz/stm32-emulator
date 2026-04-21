@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: FSMC (Flexible Static Memory Controller).
+// STM32F427 register base: 0xA0000000; external memory banks map into 0x60000000..0x9FFFFFFF.
+// Key function: bridges external NOR/SRAM/LCD-style buses onto the AHB memory space.
+// Key registers normally include BCR/BTR/BWTR bank control and timing state.
+// Critical for this emulator: board-attached LCD/display devices hang off FSMC bank windows.
+// This model is bank-oriented rather than register-complete and is aimed at external device hookup.
+// Emulator-specific note: registration remaps the live access range to the external bank window.
+// Datasheet/reference anchors: STM32F4 RM FSMC chapter and board-specific display wiring.
+
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{system::System, ext_devices::{ExtDevices, ExtDevice}};

@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: SPI1..SPI6.
+// STM32F427 bases: SPI1=0x40013000, SPI2=0x40003800, SPI3=0x40003C00, SPI4=0x40013400, SPI5=0x40015000, SPI6=0x40015400.
+// Key registers: CR1, CR2, SR, DR, CRCPR, RXCRCR, TXCRCR, I2SCFGR, I2SPR.
+// Key function: synchronous serial traffic for sensors, flash, and board-attached devices.
+// Critical for this emulator: ArduPilot runtime reaches SPI2 DMA-backed traffic on CubeBlack.
+// Current model is intentionally simple and focuses on DR transfers plus a minimal ready/busy illusion.
+// Still incomplete: stateful SR bits, DMA request generation, error flags, and detailed mode semantics.
+// Datasheet/reference anchor: STM32F4 RM SPI/I2S chapter.
+
 use crate::{system::System, ext_devices::ExtDevice};
 use super::Peripheral;
 

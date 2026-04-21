@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: not a real STM32 peripheral; this is an emulator-only software SPI helper.
+// Hardware backing: bit-banged over STM32 GPIO pins rather than a memory-mapped SPI block.
+// Key role: emulate board designs that use GPIO-driven serial buses instead of SPI1..SPI6.
+// Key signals: chip select, clock, MOSI, and MISO pins from the board config.
+// Critical for this emulator: lets external devices attach without requiring a dedicated STM32 SPI IP.
+// The implementation translates GPIO edge changes into byte traffic for ext_devices.
+// Because it is emulator-only, there is no datasheet base address to model here.
+// Reference anchor: board config wiring plus the device-specific external bus behavior.
+
 use std::rc::Rc;
 use std::{cell::RefCell};
 

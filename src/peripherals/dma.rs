@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: DMA1 / DMA2 (direct memory access controller).
+// STM32F427 bases: DMA1=0x40026000, DMA2=0x40026400.
+// Key registers: LISR/HISR/LIFCR/HIFCR plus stream windows at 0x10 + n*0x18.
+// Key behavior: stream EN, NDTR countdown, PAR/MxAR addressing, TCIF status bits.
+// Critical for this emulator: firmware uses DMA completion flags and IRQs for boot/runtime.
+// Current model covers stream decode, immediate transfers, TC flag setting, and TC IRQ pending.
+// Still incomplete: request-line driven transfers, FIFO thresholds, HT/TE signaling, conflicts.
+// Datasheet/reference anchors: STM32F4 RM DMA chapter and cubeblack/STM32F4_DMA.md.
+
 use crate::util::UniErr;
 use crate::system::System;
 use super::Peripheral;

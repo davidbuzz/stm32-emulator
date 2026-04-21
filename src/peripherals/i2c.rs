@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: I2C1 / I2C2 / I2C3.
+// STM32F427 bases: I2C1=0x40005400, I2C2=0x40005800, I2C3=0x40005C00.
+// Key registers: CR1, CR2, OAR1/2, DR, SR1, SR2, CCR, TRISE, FLTR.
+// Key function: sensor/configuration bus used heavily by ArduPilot board bring-up.
+// Critical for this emulator: real boot/runtime progress likely depends on realistic SR1/SR2 state.
+// Current model is a minimal stub with toggled status behavior, not a transaction state machine.
+// Still incomplete: START/ADDR/BTF/TXE/RXNE sequencing, DMA requests, interrupt behavior.
+// Datasheet/reference anchor: STM32F4 RM I2C chapter.
+
 use crate::system::System;
 use super::Peripheral;
 

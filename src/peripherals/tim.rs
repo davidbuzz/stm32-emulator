@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: TIM5 / TIM6 / TIM7 in the current model (general/basic timers).
+// STM32F427 bases: TIM5=0x40000C00, TIM6=0x40001000, TIM7=0x40001400.
+// Key registers: CR1, DIER, SR, CNT, PSC, ARR, and CCR1 in this implementation.
+// Key function: scheduler wakeups, timeouts, compare events, and runtime pacing.
+// Critical for this emulator: TIM5 compare interrupt is what breaks the early idle-loop stall.
+// Current model provides a free-running software timebase stepped from the emulator main loop.
+// Still incomplete: many channels/modes, update events, synchronization, and DMA request behavior.
+// Datasheet/reference anchor: STM32F4 RM general-purpose/basic timer chapters.
+
 use crate::{emulator::NUM_INSTRUCTIONS, system::System};
 
 use super::Peripheral;

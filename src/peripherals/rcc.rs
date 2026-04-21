@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: RCC (Reset and Clock Control).
+// STM32F427 base: 0x40023800.
+// Key registers: CR, PLLCFGR, CFGR, AHBxENR, APBxENR, AHBxRSTR, CSR, and backup-clock control.
+// Key function: peripheral reset, clock gating, oscillator/PLL status, and bus-frequency setup.
+// Critical for this emulator: almost every peripheral bring-up depends on RCC enable/reset semantics.
+// The current model is intentionally permissive and mostly acts like clocks are immediately available.
+// Still incomplete: realistic ready bits, PLL timing, and derived clock-rate effects.
+// Datasheet/reference anchor: STM32F4 RM RCC chapter.
+
 use crate::system::System;
 use super::Peripheral;
 

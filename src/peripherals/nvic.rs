@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: NVIC (Nested Vectored Interrupt Controller) for Cortex-M4.
+// Cortex-M private-peripheral bases: ISER starts at 0xE000E100; priority registers are at 0xE000E400.
+// Key function: tracks pending interrupts/exceptions, dispatches vectors, and restores exception state.
+// Critical for this emulator: ArduPilot boot relies on timer IRQ wakeups, SVC, SysTick, and DMA IRQ paths.
+// This model is intentionally narrow and focuses on pending state plus exception entry/return stacking.
+// It also cooperates with SCB VTOR so vectors come from the firmware-selected table.
+// Still incomplete: full enable/priority/arbitration semantics and nested-interrupt behavior.
+// Datasheet/reference anchor: ARMv7-M NVIC/exception architecture as used by STM32F427.
+
 use std::sync::atomic::Ordering;
 
 use unicorn_engine::{RegisterARM, Unicorn};
@@ -21,6 +30,7 @@ pub struct Nvic {
 const IRQ_OFFSET: i32 = 16;
 
 pub mod irq {
+    pub const SVCALL: i32 = -5;
     pub const PENDSV: i32 = -2;
     pub const SYSTICK: i32 = -1;
 }
@@ -121,7 +131,7 @@ impl Nvic {
     // SPSEL, bit[1], 0 means we use MSP, 1 means we use PSP.
     // FPCA, bit[2], if the processor includes the FP extension.
 
-    fn run_interrupt(&mut self, sys: &System, irq: i32) {
+    pub fn run_interrupt(&mut self, sys: &System, irq: i32) {
         let vector = Self::read_vector_addr(sys, self.vector_table_addr, irq);
 
         let mut uc = sys.uc.borrow_mut();

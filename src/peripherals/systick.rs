@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: STK / SysTick timer (Cortex-M system timer).
+// Cortex-M private-peripheral base: 0xE000E010.
+// Key registers: CTRL, LOAD, VAL, CALIB.
+// Key function: periodic exception source for RTOS tick and timebase services.
+// Critical for this emulator: scheduler progression and timeout logic may depend on SysTick delivery.
+// This model stores control/reload state and cooperates with NVIC to raise SysTick when configured.
+// Still incomplete: exact decrement timing, calibration semantics, and all CTRL side effects.
+// Datasheet/reference anchor: ARMv7-M SysTick architecture as used by STM32F427.
+
 use crate::system::System;
 use super::Peripheral;
 

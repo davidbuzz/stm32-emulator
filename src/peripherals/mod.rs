@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// STM32 name: not a hardware peripheral; this is the emulator peripheral dispatch layer.
+// STM32F427 coverage: memory-mapped peripheral windows at 0x40000000..0xB0000000 and 0xE0000000..0xE1000000.
+// Key role: register SVD-described blocks, route live MMIO accesses, and step time-based peripherals.
+// Key function: choose dedicated models where needed and fall back to generic register descriptions.
+// Critical for this emulator: this file decides whether firmware sees real behavior or generic zeros.
+// It also owns bit-banding handling, debug descriptions, and the top-level read/write path.
+// New peripheral work usually starts by adding a dedicated model here and wiring name-based registration.
+// Reference anchors: STM32F427 SVD plus the Cortex-M private-peripheral map.
+
 pub mod rcc;
 pub mod spi;
 pub mod usart;
