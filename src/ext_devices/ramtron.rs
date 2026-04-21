@@ -15,7 +15,8 @@ use super::ExtDevice;
 
 const RAMTRON_SIZE: usize = 32 * 1024;
 
-// Cypress FM25V02 RDID response: 6 manufacturer bytes + memory byte + id1 + id2
+// Cypress FM25V02 RDID response: manufacturer[7] + id1 + id2
+// Matches ArduPilot SITL FM25V02: fill_rdid copies manufacturer bytes, then id1 at [7], id2 at [8]
 const RDID_RESPONSE: [u8; 9] = [0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0xC2, 0x22, 0x00];
 
 #[derive(Debug, Deserialize, Default)]
@@ -24,6 +25,7 @@ pub struct RamtronConfig {
     pub cs_pin: String,
 }
 
+#[derive(Debug)]
 enum State {
     Idle,
     CollectingArgs { cmd: Cmd, args: Vec<u8> },
@@ -32,7 +34,7 @@ enum State {
     SendingReply(VecDeque<u8>),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Cmd {
     Read,
     Write,
