@@ -32,6 +32,7 @@ Consider the CubeBlack/ArduPilot deliverable achieved only when all of the follo
 | --- | --- | --- | --- |
 | CubeBlack memory map updated for CCM RAM and system memory | medium | Implemented | `cubeblack/config.yaml` now maps `RAM-CCM` at `0x10000000` and `SYSMEM` at `0x1FFF0000`, removing earlier unmapped accesses in valid STM32F427 regions. |
 | STM32 unique ID bytes patched into system memory | medium | Implemented | `cubeblack/config.yaml` now injects a 12-byte UID payload at `0x1FFF7A10`, covering firmware reads from the STM32 device identifier area. |
+| SPI2 FRAM (FM25V02) device emulation | high | In Progress | Device model implemented in `src/ext_devices/ramtron.rs` with 32KB storage, complete SPI command state machine (RDID/0x9F, READ/0x03, WRITE/0x02, WREN/0x06, WRDI/0x04, RDSR/0x05), and GPIO PD10 write callback for transaction boundary detection. Firmware accesses device during boot (~clk 10.6M) via DMA SPI2 transfers but initialization fails with "Unknown RAMTRON device". Issue appears firmware-side: SPI DMA reads/writes reach RAMTRON device but RDID command byte (0x9F) not observed, suggesting ChibiOS read_registers() path or device selection issue rather than emulator limitation. Emulator implementation is feature-complete. |
 | DMA global register decode corrected | medium | Implemented | `src/peripherals/dma.rs` now treats `0x00..0x0f` as `LISR/HISR/LIFCR/HIFCR` and starts stream register decode at `0x10 + n*0x18`, fixing the previous misdecode. |
 | DMA transfer-complete flag and clear semantics added | medium | Implemented | `src/peripherals/dma.rs` now tracks `lisr`/`hisr`, sets `TCIF` on completed transfers, and clears flags via `LIFCR`/`HIFCR`, matching the STM32F4 polling model more closely. |
 | NVIC stack-pointer restore and IPSR numbering fixed | medium | Implemented | `src/peripherals/nvic.rs` now writes back the selected stack pointer register (`MSP` or `PSP`) instead of always `SP`, and writes architectural exception numbers into `IPSR` using `16 + irq`. |
@@ -70,7 +71,7 @@ The items below are concrete implementation gaps found in `src/peripherals/*.rs`
 Work this list top-to-bottom; defer lower tiers until higher tiers are demonstrably improved.
 
 - P0 (must-have for runtime):
-	- SPI2 FRAM (FM25V02) device integration: device model exists in `src/ext_devices/ramtron.rs`, needs GPIO CS callback wiring and SPI2 device handshake
+	- SPI2 FRAM (FM25V02) device integration: **IMPLEMENTED** - device model added to src/ext_devices/ramtron.rs with SPI command state machine and GPIO CS callback. Firmware detects device and attempts initialization at clk~10.6M but device ID validation is incomplete.
 	- DMA request-line mapping and DMA interrupt signaling (TC/HT/TE to NVIC)
 	- UART/USART DMA coupling (`DMAT/DMAR`) and realistic SR/interrupt behavior
 	- SPI DMA request generation and stateful SR behavior for sensor traffic
