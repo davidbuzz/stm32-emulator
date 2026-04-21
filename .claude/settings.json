@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 100000000)",
+      "Bash(git commit -m ' *)",
+      "Bash(../target/release/stm32-emulator config.yaml --console-only --max-instructions 15000000)"
+    ]
+  }
+}

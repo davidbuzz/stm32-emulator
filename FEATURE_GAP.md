@@ -70,6 +70,7 @@ The items below are concrete implementation gaps found in `src/peripherals/*.rs`
 Work this list top-to-bottom; defer lower tiers until higher tiers are demonstrably improved.
 
 - P0 (must-have for runtime):
+	- SPI2 FRAM (FM25V02) device integration: device model exists in `src/ext_devices/ramtron.rs`, needs GPIO CS callback wiring and SPI2 device handshake
 	- DMA request-line mapping and DMA interrupt signaling (TC/HT/TE to NVIC)
 	- UART/USART DMA coupling (`DMAT/DMAR`) and realistic SR/interrupt behavior
 	- SPI DMA request generation and stateful SR behavior for sensor traffic

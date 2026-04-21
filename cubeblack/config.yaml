@@ -56,6 +56,9 @@ devices:
   #     swap_x_y: true
   #     flip_x: true
   #     scale_down: 2
+  ramtron:
+    - peripheral: SPI2
+      cs_pin: PD10
   usart_probe:
     - peripheral: USART1
     - peripheral: USART2
