@@ -131,6 +131,7 @@ struct OtgFsState {
     ep0_fifo_read_count: u8,
     ep0_in_transfer_pending: bool,
     ep_in_transfer_pending: [bool; EP_COUNT], // for EP1..3 (CDC bulk/interrupt)
+    ep_txfe_was_fired: [bool; EP_COUNT],      // tracks whether TXFE fired for each pending EP transfer
     enum_stage: UsbEnumStage,
     cdc_line_buf: Vec<u8>,
 }
@@ -320,11 +321,13 @@ impl OtgFsState {
                 otg_debug!("DIEPCTL{ep} EPENA set dieptsiz={:#010x} diepempmsk={:#010x}", self.dieptsiz[ep], self.diepempmsk);
                 if ep < EP_COUNT {
                     self.ep_in_transfer_pending[ep] = true;
+                    self.ep_txfe_was_fired[ep] = false;
                 }
             }
 
             if self.diepempmsk & (1 << ep) != 0 {
                 self.mark_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+                if ep > 0 && ep < EP_COUNT { self.ep_txfe_was_fired[ep] = true; }
             }
         }
     }
@@ -487,6 +490,7 @@ impl OtgFsState {
                 for ep in 0..EP_COUNT {
                     if value & (1 << ep) != 0 && self.diepctl[ep] & DIEPCTL_EPENA != 0 {
                         self.mark_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+                        if ep > 0 && ep < EP_COUNT { self.ep_txfe_was_fired[ep] = true; }
                     }
                 }
             }
@@ -624,14 +628,37 @@ impl Peripheral for OtgFs {
         }
 
         // Fire XFRC for non-EP0 IN endpoints (CDC bulk/interrupt) after EPENA is set.
-        // The firmware waits for XFRC before queuing the next TX packet.
+        // ChibiOS always sets DIEPEMPMSK after EPENA (TXFE-interrupt-driven path).
+        // We use ep_txfe_was_fired to avoid racing XFRC against DIEPEMPMSK being written
+        // in the very next CPU instruction after EPENA.
         for ep in 1..EP_COUNT {
             if shared.ep_in_transfer_pending[ep] && shared.diepctl[ep] & DIEPCTL_EPENA != 0 {
-                shared.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
-                shared.mark_in_endpoint_interrupt(ep, DIEPINT_XFRC);
-                shared.diepctl[ep] &= !DIEPCTL_EPENA;
-                shared.ep_in_transfer_pending[ep] = false;
-                shared.irq_latched = false; // ensure IEPINT wakes the ISR
+                let txfe_active = shared.diepint[ep] & DIEPINT_TXFE != 0
+                    && shared.diepempmsk & (1 << ep) != 0;
+                let txfe_done = shared.ep_txfe_was_fired[ep]
+                    && shared.diepempmsk & (1 << ep) == 0;
+                if txfe_active {
+                    // TXFE is live: let the firmware ISR fill the FIFO before XFRC.
+                    shared.irq_latched = false;
+                } else if txfe_done || !shared.cdc_line_buf.is_empty() {
+                    // TXFE handled (firmware cleared DIEPEMPMSK after filling FIFO),
+                    // or direct-fill path left data in the buffer.
+                    // Flush any partial CDC line, then fire XFRC.
+                    if !shared.cdc_line_buf.is_empty() {
+                        let line = String::from_utf8_lossy(&shared.cdc_line_buf).trim().to_string();
+                        if !line.is_empty() {
+                            info!("USB-CDC ep{} '{}'", ep, line);
+                        }
+                        shared.cdc_line_buf.clear();
+                    }
+                    shared.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+                    shared.mark_in_endpoint_interrupt(ep, DIEPINT_XFRC);
+                    shared.diepctl[ep] &= !DIEPCTL_EPENA;
+                    shared.ep_in_transfer_pending[ep] = false;
+                    shared.ep_txfe_was_fired[ep] = false;
+                    shared.irq_latched = false;
+                }
+                // else: waiting for DIEPEMPMSK to be written (TXFE not yet fired)
             }
         }
 
