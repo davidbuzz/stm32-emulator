@@ -46,6 +46,7 @@ pub struct Ramtron {
     storage: Vec<u8>,
     state: State,
     write_enabled: bool,
+    cs_active: bool,  // Track CS state: true=high (inactive), false=low (active)
 }
 
 impl Ramtron {
@@ -56,7 +57,17 @@ impl Ramtron {
             storage: vec![0xFF; RAMTRON_SIZE],
             state: State::Idle,
             write_enabled: false,
+            cs_active: true,  // CS starts high (inactive)
         })
+    }
+
+    /// Called when CS pin state changes. Reset only on deassert (low→high transition)
+    pub fn on_cs_change(&mut self, cs_value: bool) {
+        if !self.cs_active && cs_value {
+            // Transition from low (active) to high (inactive) - deassert
+            self.state = State::Idle;
+        }
+        self.cs_active = cs_value;
     }
 
     pub fn reset_state(&mut self) {
@@ -85,6 +96,9 @@ impl ExtDevice<(), u8> for Ramtron {
     fn write(&mut self, _sys: &System, _addr: (), v: u8) {
         let prev_state = std::mem::replace(&mut self.state, State::Idle);
         self.state = match prev_state {
+            // While sending a reply (e.g. RDID response), MOSI is dummy bytes — ignore writes.
+            // Real SPI FRAM hardware ignores MOSI during the response phase.
+            State::SendingReply(data) => State::SendingReply(data),
             State::CollectingArgs { cmd, mut args } => {
                 args.push(v);
                 self.collect(cmd, args)

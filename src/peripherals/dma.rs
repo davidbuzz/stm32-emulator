@@ -171,7 +171,13 @@ impl Stream {
 
         let buf = match dir {
             Dir::Read => {
-                peri.map(|p| p.peripheral.borrow_mut().read_dma(sys, peri_addr-p.start, size))
+                let b = peri.map(|p| p.peripheral.borrow_mut().read_dma(sys, peri_addr-p.start, size));
+                // Tell the peripheral where this RX DMA is going so that the paired TX DMA
+                // (write_dma) can patch the correct RAM location with full-duplex MISO bytes.
+                if let Some(p) = peri {
+                    p.peripheral.borrow_mut().set_dma_rx_dest(dst);
+                }
+                b
             }
             Dir::Write | Dir::MemCopy => {
                 sys.uc.borrow().mem_read_as_vec(src.into(), size)

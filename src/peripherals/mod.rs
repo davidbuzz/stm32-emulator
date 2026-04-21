@@ -22,12 +22,14 @@ pub mod otg_fs;
 pub mod scb;
 pub mod core_debug;
 pub mod sw_spi;
+pub mod sdio;
 pub mod tim;
 
 use rcc::*;
 use serde::Deserialize;
 use spi::*;
 use usart::*;
+use sdio::*;
 use systick::*;
 use gpio::*;
 use dma::*;
@@ -101,6 +103,7 @@ impl Peripherals {
             .or_else(||       OtgFs::new(&name))
             .or_else(||         Tim::new(&name))
             .or_else(||         Spi::new(&name, ext_devices))
+            .or_else(||        Sdio::new(&name))
         ;
 
         if let Some(p) = p {
@@ -305,6 +308,10 @@ pub trait Peripheral {
             self.write(sys, offset, v.into());
         }
     }
+    /// Called by the DMA controller after read_dma() so the peripheral knows the RAM destination.
+    /// Used by SPI to implement full-duplex DMA exchanges: the TX DMA (write_dma) patches the RAM
+    /// that the earlier RX DMA already wrote placeholder bytes to.
+    fn set_dma_rx_dest(&mut self, _dest_addr: u32) {}
 }
 
 struct GenericPeripheral {

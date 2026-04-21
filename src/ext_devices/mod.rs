@@ -109,14 +109,15 @@ impl ExtDevicesConfig {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Wire GPIO CS callbacks to RAMTRON reset_state()
+        // Wire GPIO CS callbacks to RAMTRON for proper transaction isolation
         for ramtron_rc in &ramtrons {
             let cs_pin = Pin::from_str(&ramtron_rc.borrow().config.cs_pin);
             let ramtron = ramtron_rc.clone();
-            gpio.add_write_callback(cs_pin, move |_sys, _value| {
-                // Reset RAMTRON state when CS pin is toggled (deassert/reassert)
-                // In practice, the deassert high-to-low or low-to-high transition marks transaction boundary
-                ramtron.borrow_mut().reset_state();
+            gpio.add_write_callback(cs_pin, move |_sys, value| {
+                // Only reset RAMTRON state when CS is deasserted (low→high transition)
+                // In STM32 GPIO: high=true (inactive), low=false (active)
+                // This prevents state loss during command/response sequences
+                ramtron.borrow_mut().on_cs_change(value);
             });
         }
 

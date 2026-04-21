@@ -9,7 +9,7 @@
 // Still incomplete: stateful SR bits, DMA request generation, error flags, and detailed mode semantics.
 // Datasheet/reference anchor: STM32F4 RM SPI/I2S chapter.
 
-use crate::{system::System, ext_devices::ExtDevice};
+use crate::{system::System, ext_devices::ExtDevice, util::UniErr};
 use super::Peripheral;
 
 use crate::ext_devices::ExtDevices;
@@ -20,9 +20,13 @@ use std::{rc::Rc, cell::RefCell};
 pub struct Spi {
     pub name: String,
     pub cr1: u32,
+    pub cr2: u32,
     pub rx_buffer: u32,
     pub ready_toggle: bool,
     pub ext_device: Option<Rc<RefCell<dyn ExtDevice<(), u8>>>>,
+    /// Pending RX DMA destination address: set when read_dma fires (RX DMA),
+    /// consumed in write_dma (TX DMA) to patch the RAM with real MISO bytes.
+    pending_rx_dest: Option<u32>,
 }
 
 impl Spi {
@@ -44,6 +48,62 @@ impl Spi {
 }
 
 impl Peripheral for Spi {
+    fn set_dma_rx_dest(&mut self, dest_addr: u32) {
+        self.pending_rx_dest = Some(dest_addr);
+    }
+
+    /// For full-duplex DMA (TXDMAEN set in CR2), the RX DMA fires first.
+    /// Return empty to avoid overwriting the TX source buffer; write_dma handles the exchange.
+    /// For receive-only DMA (TXDMAEN clear), generate MISO by sending dummy 0xFF writes.
+    fn read_dma(&mut self, sys: &System, offset: u32, size: usize) -> std::collections::VecDeque<u8> {
+        if offset == 0x000C {
+            let txdmaen = self.cr2 & (1 << 1) != 0;
+            if txdmaen {
+                // Full-duplex exchange: write_dma will handle the actual exchange
+                return std::collections::VecDeque::new();
+            } else if let Some(dev) = &self.ext_device {
+                // Receive-only: send dummy 0xFF bytes and collect MISO
+                let dev = dev.clone();
+                let mut miso = std::collections::VecDeque::new();
+                for _ in 0..size {
+                    dev.borrow_mut().write(sys, (), 0xFF);
+                    miso.push_back(dev.borrow_mut().read(sys, ()));
+                }
+                return miso;
+            }
+        }
+        std::collections::VecDeque::new()
+    }
+
+    /// Execute the full-duplex SPI exchange. Each byte in `value` is MOSI; we read MISO from
+    /// the ext_device first (one byte behind, matching real SPI timing), then write MOSI.
+    /// If a pending RX DMA destination was set by set_dma_rx_dest, patch that RAM location
+    /// with the collected MISO bytes so the firmware sees the correct response.
+    fn write_dma(&mut self, sys: &System, offset: u32, mut value: std::collections::VecDeque<u8>) {
+        if offset != 0x000C {
+            return;
+        }
+        let rx_bytes: Vec<u8> = value.into_iter().map(|v| {
+            let rx = self.ext_device.as_ref()
+                .map(|d| d.borrow_mut().read(sys, ()) as u8)
+                .unwrap_or(0xFF);
+            if let Some(d) = &self.ext_device {
+                d.borrow_mut().write(sys, (), v);
+            }
+            rx
+        }).collect();
+        if let Some(dest) = self.pending_rx_dest.take() {
+            if let Err(e) = sys.uc.borrow_mut().mem_write(dest.into(), &rx_bytes) {
+                warn!("{} DMA full-duplex patch failed dest=0x{:08x}: {}", self.name, dest, UniErr(e));
+            }
+        } else {
+            // No pending RX DMA: update rx_buffer with the last received byte (polling compat)
+            if let Some(&last) = rx_bytes.last() {
+                self.rx_buffer = last as u32;
+            }
+        }
+    }
+
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match offset {
             0x0000 => {
@@ -76,6 +136,10 @@ impl Peripheral for Spi {
             0x0000 => {
                 // CR1 register
                 self.cr1 = value;
+            }
+            0x0004 => {
+                // CR2 register — track TXDMAEN (bit 1) and RXDMAEN (bit 0) for DMA mode detection
+                self.cr2 = value;
             }
             0x000C => {
                 // DR register
