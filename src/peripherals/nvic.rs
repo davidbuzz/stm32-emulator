@@ -118,7 +118,8 @@ impl Nvic {
         if !fpca { lr |= 0b0001_0000; } // Yes, no fpca means the bit is set
         uc.reg_write(RegisterARM::LR, lr.into()).unwrap();
 
-        uc.reg_write(RegisterARM::IPSR, irq as u64).unwrap();
+        let exception_number = (IRQ_OFFSET + irq) as u64;
+        uc.reg_write(RegisterARM::IPSR, exception_number).unwrap();
         uc.reg_write(RegisterARM::PC, vector as u64).unwrap();
 
         self.in_interrupt = true;
@@ -206,7 +207,7 @@ impl Nvic {
         for reg in Self::CONTEXT_REGS {
             push_reg(reg);
         }
-        uc.reg_write(RegisterARM::SP, sp).unwrap();
+        uc.reg_write(sp_reg, sp).unwrap();
     }
 
     fn pop_regs(uc: &mut Unicorn<()>, spsel: bool, fpca: bool) {
@@ -230,7 +231,7 @@ impl Nvic {
                 pop_reg(*reg);
             }
         }
-        uc.reg_write(RegisterARM::SP, sp).unwrap();
+        uc.reg_write(sp_reg, sp).unwrap();
     }
 }
 

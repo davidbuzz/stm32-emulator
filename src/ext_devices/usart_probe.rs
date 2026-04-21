@@ -36,14 +36,26 @@ impl ExtDevice<(), u8> for UsartProbe {
     }
 
     fn write(&mut self, _sys: &System, _addr: (), v: u8) {
-        if v == 0x0a {
-            // EOL
+        // Flush on LF/CR, and also if output grows too long without line endings.
+        if v == b'\n' || v == b'\r' {
             let line = String::from_utf8_lossy(&self.rx);
             let line = line.trim();
-            info!("{} '{}'", self.name, line);
+            if !line.is_empty() {
+                info!("{} '{}'", self.name, line);
+            }
             self.rx.clear();
-        } else {
-            self.rx.push(v);
+            return;
+        }
+
+        self.rx.push(v);
+
+        if self.rx.len() >= 256 {
+            let line = String::from_utf8_lossy(&self.rx);
+            let line = line.trim();
+            if !line.is_empty() {
+                info!("{} '{}'", self.name, line);
+            }
+            self.rx.clear();
         }
     }
 }

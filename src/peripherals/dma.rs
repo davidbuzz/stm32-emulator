@@ -9,6 +9,8 @@ use super::Peripherals;
 pub struct Dma {
     name: String,
     streams: [Stream; 8],
+    lisr: u32,
+    hisr: u32,
 }
 
 impl Dma {
@@ -20,20 +22,41 @@ impl Dma {
             None
         }
     }
+
+    fn set_tcif(&mut self, stream: usize) {
+        let bit = tcif_mask(stream);
+        if stream < 4 {
+            self.lisr |= bit;
+        } else {
+            self.hisr |= bit;
+        }
+    }
 }
 
 impl Peripheral for Dma {
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
         match Access::from_offset(offset) {
+            Access::Reg(Reg::Lisr) => self.lisr,
+            Access::Reg(Reg::Hisr) => self.hisr,
+            Access::Reg(Reg::Lifcr) | Access::Reg(Reg::Hifcr) | Access::Reg(Reg::Unknown) => 0,
             Access::StreamReg(i, offset) => self.streams[i].read(&self.name, sys, offset),
-            _ => 0
         }
     }
 
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
         match Access::from_offset(offset) {
-            Access::StreamReg(i, offset) => self.streams[i].write(&self.name, sys, offset, value),
-            _ => {}
+            Access::Reg(Reg::Lifcr) => {
+                self.lisr &= !value;
+            }
+            Access::Reg(Reg::Hifcr) => {
+                self.hisr &= !value;
+            }
+            Access::Reg(_) => {}
+            Access::StreamReg(i, offset) => {
+                if self.streams[i].write(&self.name, sys, offset, value) {
+                    self.set_tcif(i);
+                }
+            }
         }
     }
 }
@@ -168,7 +191,7 @@ impl Stream {
         }
     }
 
-    pub fn write(&mut self, name: &str, sys: &System, offset: u32, mut value: u32) {
+    pub fn write(&mut self, name: &str, sys: &System, offset: u32, mut value: u32) -> bool {
         match offset {
             0x0000 => {
                 self.cr = value;
@@ -181,6 +204,7 @@ impl Stream {
                     value &= !1;
                     self.ndtr = 0;
                     self.next_cr = Some(value);
+                    return true;
                 }
             }
             0x0004 => { self.ndtr = value & 0xFFFF; }
@@ -190,6 +214,8 @@ impl Stream {
             0x0014 => { self.fcr = value; }
             _ => {}
         }
+
+        false
     }
 }
 
@@ -201,25 +227,57 @@ enum Dir {
     Invalid,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Reg {
+    Lisr,
+    Hisr,
+    Lifcr,
+    Hifcr,
+    Unknown,
+}
+
 enum Access {
-    Reg(u32),
+    Reg(Reg),
     /// CR0, CR1, etc.
     StreamReg(usize, u32),
 }
 
+fn tcif_mask(stream: usize) -> u32 {
+    // STM32F4 DMA status flag layout in LISR/HISR repeats for stream groups.
+    // Per stream, TCIF is at bit offset +5 inside each group.
+    match stream % 4 {
+        0 => 1 << 5,
+        1 => 1 << 11,
+        2 => 1 << 21,
+        3 => 1 << 27,
+        _ => 0,
+    }
+}
+
 impl Access {
     pub fn from_offset(offset: u32) -> Self {
-        if offset < 0x28 {
-            Access::Reg(offset)
+        // Global DMA registers are at 0x00..0x0f (LISR/HISR/LIFCR/HIFCR).
+        // Stream registers start at 0x10 and are 0x18 bytes apart.
+        if offset < 0x10 {
+            let reg = match offset {
+                0x00 => Reg::Lisr,
+                0x04 => Reg::Hisr,
+                0x08 => Reg::Lifcr,
+                0x0c => Reg::Hifcr,
+                _ => Reg::Unknown,
+            };
+            Access::Reg(reg)
         } else {
             let stride = 0x18;
             let start = 0x10;
 
             let offset = offset - start;
-            Access::StreamReg(
-                (offset / stride) as usize,
-                offset % stride
-            )
+            let stream = (offset / stride) as usize;
+            if stream < 8 {
+                Access::StreamReg(stream, offset % stride)
+            } else {
+                Access::Reg(Reg::Unknown)
+            }
         }
     }
 }
