@@ -62,6 +62,9 @@ devices:
     - peripheral: USART3
     - peripheral: UART4
     - peripheral: UART5
+    - peripheral: USART6
+    - peripheral: UART7
+    - peripheral: UART8
   # display:
   #   - peripheral: FSMC.BANK1
   #     framebuffer: Touchscreen

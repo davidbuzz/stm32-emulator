@@ -1,0 +1,4 @@
+- OTG_FS global/device/pwrclk must share backing state; separate instances break DAINT/GINTSTS cross-block behavior.
+- Early CubeBlack USB control-transfer bring-up needs DIEPEMPMSK at OTG_FS_DEVICE offset 0x34 to persist; ChibiOS uses it to gate TXFE handling.
+- Synthetic EP0 setup should be one-shot. Re-injecting STUP/XFRC on every OUT rearm traps firmware in repeated endpoint helper/stall churn.
+- After DIEPTSIZ0=0x00080000 and EPENA on EP0 IN, firmware expects a zero-length XFRC completion edge, not a perpetual TXFE-only state.

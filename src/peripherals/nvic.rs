@@ -41,6 +41,22 @@ pub mod irq {
 // the saturn firmware to work just well enough.
 
 impl Nvic {
+    const FP_EXTENDED_FRAME_RESERVED_WORD: u32 = 0;
+
+    fn push_word(uc: &mut Unicorn<()>, sp: &mut u64, value: u32) {
+        *sp -= 4;
+        uc.mem_write(*sp, &value.to_le_bytes())
+            .expect("Invalid SP pointer during interrupt");
+    }
+
+    fn pop_word(uc: &mut Unicorn<()>, sp: &mut u64) -> u32 {
+        let mut value = [0, 0, 0, 0];
+        uc.mem_read(*sp, &mut value)
+            .expect("Invalid SP pointer during interrupt return");
+        *sp += 4;
+        u32::from_le_bytes(value)
+    }
+
     pub fn set_intr_pending(&mut self, irq: i32) {
         trace!("Set irq pending irq={}", irq);
         let bit = IRQ_OFFSET + irq;
@@ -112,10 +128,18 @@ impl Nvic {
         primask != 0
     }
 
+    fn basepri_masks_external_interrupts(sys: &System) -> bool {
+        let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap();
+        basepri != 0
+    }
+
     pub fn run_pending_interrupts(&mut self, sys: &System) {
         self.maybe_set_systick_intr_pending();
 
-        if Self::are_interrupts_disabled(sys) || self.active_exceptions > 0 {
+        let primask_disabled = Self::are_interrupts_disabled(sys);
+        let basepri_masked = Self::basepri_masks_external_interrupts(sys);
+
+        if primask_disabled || self.active_exceptions > 0 {
             trace!(
                 "Interrupt dispatch blocked primask={} active_exceptions={} pending=0x{:032x}",
                 sys.uc.borrow().reg_read(RegisterARM::PRIMASK).unwrap(),
@@ -125,7 +149,22 @@ impl Nvic {
             return;
         }
 
+        if basepri_masked {
+            let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
+            if self.pending & !sys_pending_mask != 0 {
+                trace!(
+                    "Interrupt dispatch blocked basepri={} pending=0x{:032x}",
+                    sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap(),
+                    self.pending,
+                );
+            }
+        }
+
         if let Some(irq) = self.get_and_clear_next_intr_pending() {
+            if irq >= 0 && basepri_masked {
+                self.set_intr_pending(irq);
+                return;
+            }
             self.run_interrupt(sys, irq);
         }
     }
@@ -158,7 +197,6 @@ impl Nvic {
             control_reg & (1 << 1) != 0
         };
         let fpca = control_reg & (2 << 1) != 0;
-
         trace!("Running interrupt irq={} spsel={} fpca={} vector={:#08x}",
             irq, spsel, fpca, vector);
 
@@ -252,20 +290,20 @@ impl Nvic {
         let sp_reg = if spsel { RegisterARM::PSP } else { RegisterARM::MSP };
         let mut sp = uc.reg_read(sp_reg).unwrap();
 
-        let mut push_reg = |reg| {
-            let v = uc.reg_read(reg).unwrap() as u32;
-            //trace!("push sp=0x{:08x} {:5?}=0x{:08x}", sp, reg, v);
-            sp -= 4;
-            uc.mem_write(sp, &v.to_le_bytes()).expect("Invalid SP pointer during interrupt");
-        };
-
         if fpca {
             for reg in Self::CONTEXT_REGS_EXTENDED {
-                push_reg(reg);
+                let value = uc.reg_read(reg).unwrap() as u32;
+                Self::push_word(uc, &mut sp, value);
             }
+
+            // ARMv7-M extended FP frames include one reserved word in addition to
+            // S0-S15 and FPSCR. ChibiOS advances PSP by 104 bytes in its SVC path,
+            // so omitting this word misaligns subsequent thread restore frames.
+            Self::push_word(uc, &mut sp, Self::FP_EXTENDED_FRAME_RESERVED_WORD);
         }
         for reg in Self::CONTEXT_REGS {
-            push_reg(reg);
+            let value = uc.reg_read(reg).unwrap() as u32;
+            Self::push_word(uc, &mut sp, value);
         }
         uc.reg_write(sp_reg, sp).unwrap();
     }
@@ -274,21 +312,16 @@ impl Nvic {
         let sp_reg = if spsel { RegisterARM::PSP } else { RegisterARM::MSP };
         let mut sp = uc.reg_read(sp_reg).unwrap();
 
-        let mut pop_reg = |reg| {
-            let mut v = [0,0,0,0];
-            uc.mem_read(sp, &mut v).expect("Invalid SP pointer during interrupt return");
-            let v = u32::from_le_bytes(v);
-            //trace!("pop sp=0x{:08x} {:5?}=0x{:08x}", sp, reg, v);
-            sp += 4;
-            uc.reg_write(reg, v as u64).unwrap();
-        };
-
         for reg in Self::CONTEXT_REGS.iter().rev() {
-            pop_reg(*reg);
+            let value = Self::pop_word(uc, &mut sp);
+            uc.reg_write(*reg, value as u64).unwrap();
         }
         if fpca {
+            let _reserved = Self::pop_word(uc, &mut sp);
+
             for reg in Self::CONTEXT_REGS_EXTENDED.iter().rev() {
-                pop_reg(*reg);
+                let value = Self::pop_word(uc, &mut sp);
+                uc.reg_write(*reg, value as u64).unwrap();
             }
         }
         uc.reg_write(sp_reg, sp).unwrap();

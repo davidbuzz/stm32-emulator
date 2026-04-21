@@ -9,9 +9,15 @@
 // Still incomplete: endpoint state machines, FIFOs, USB interrupt detail, and CDC data bridging.
 // Datasheet/reference anchor: STM32F4 RM USB OTG FS chapters and the STM32F427 SVD.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::system::System;
 
 use super::Peripheral;
+
+const OTG_FS_IRQ: i32 = 67;
+const GAHBCFG_GINT: u32 = 1 << 0;
 
 const GRSTCTL_CSRST: u32 = 1 << 0;
 const GRSTCTL_RXFFLSH: u32 = 1 << 4;
@@ -19,12 +25,35 @@ const GRSTCTL_TXFFLSH: u32 = 1 << 5;
 const GRSTCTL_AHBIDL: u32 = 1 << 31;
 
 const GINTSTS_RESET: u32 = 0x0400_0020;
+const GINTSTS_SOF: u32 = 1 << 3;
+const GINTSTS_USBRST: u32 = 1 << 12;
+const GINTSTS_ENUMDNE: u32 = 1 << 13;
+const GINTSTS_IEPINT: u32 = 1 << 18;
+const GINTSTS_OEPINT: u32 = 1 << 19;
+const GINTSTS_SRQINT: u32 = 1 << 30;
 const GNPTXSTS_RESET: u32 = 0x0008_0200;
 const CID_RESET: u32 = 0x0000_1000;
+const OTG_STARTUP_EVENT_DELAY: u32 = 2048;
+const OTG_SOF_PERIOD: u32 = 4096;
+const EP_COUNT: usize = 4;
+const DOEPINT_XFRC: u32 = 1 << 0;
+const DOEPINT_STUP: u32 = 1 << 3;
+const DIEPINT_XFRC: u32 = 1 << 0;
+const DIEPINT_TXFE: u32 = 1 << 7;
+const DOEPCTL_EPENA: u32 = 1 << 31;
+const DOEPCTL_CNAK: u32 = 1 << 26;
+const DOEPCTL_SNAK: u32 = 1 << 27;
+const DOEPCTL_USBAEP: u32 = 1 << 15;
+const DOEPCTL_NAKSTS: u32 = 1 << 17;
+const DIEPCTL_EPENA: u32 = 1 << 31;
+const DIEPCTL_CNAK: u32 = 1 << 26;
+const DIEPCTL_SNAK: u32 = 1 << 27;
+const DIEPCTL_USBAEP: u32 = 1 << 15;
+const DIEPCTL_NAKSTS: u32 = 1 << 17;
+const DTXFSTS_RESET_WORDS: u32 = 0x80;
 
 #[derive(Default)]
-pub struct OtgFs {
-    kind: OtgKind,
+struct OtgFsState {
     gotgctl: u32,
     gotgint: u32,
     gahbcfg: u32,
@@ -45,10 +74,34 @@ pub struct OtgFs {
     dsts: u32,
     diepmsk: u32,
     doepmsk: u32,
+    diepempmsk: u32,
     daint: u32,
     daintmsk: u32,
+    diepctl: [u32; EP_COUNT],
+    doepctl: [u32; EP_COUNT],
+    diepint: [u32; EP_COUNT],
+    doepint: [u32; EP_COUNT],
+    dieptsiz: [u32; EP_COUNT],
+    doeptsiz: [u32; EP_COUNT],
+    dtxfsts: [u32; EP_COUNT],
     pcgcctl: u32,
     pending_reset_clear: bool,
+    startup_stage: StartupStage,
+    event_delay: u32,
+    sof_delay: u32,
+    irq_latched: bool,
+    ep0_setup_pending: bool,
+    ep0_setup_seen: bool,
+    ep0_in_transfer_pending: bool,
+}
+
+pub struct OtgFs {
+    kind: OtgKind,
+    shared: Rc<RefCell<OtgFsState>>,
+}
+
+thread_local! {
+    static OTG_FS_SHARED: Rc<RefCell<OtgFsState>> = Rc::new(RefCell::new(OtgFsState::default()));
 }
 
 #[derive(Default)]
@@ -57,6 +110,15 @@ enum OtgKind {
     Global,
     Device,
     PwrClk,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum StartupStage {
+    #[default]
+    Idle,
+    UsbReset,
+    EnumDone,
+    Running,
 }
 
 impl OtgFs {
@@ -68,18 +130,223 @@ impl OtgFs {
             _ => return None,
         };
 
-        Some(Box::new(Self {
-            kind,
-            grstctl: GRSTCTL_AHBIDL,
-            gintsts: GINTSTS_RESET,
-            grxfsiz: 0x0000_0200,
-            dieptxf0: 0x0000_0200,
-            gnptxsts: GNPTXSTS_RESET,
-            cid: CID_RESET,
-            hptxfsiz: 0x0200_0600,
-            dieptxf: [0x0200_0400; 3],
-            ..Default::default()
-        }))
+        let shared = OTG_FS_SHARED.with(|shared| shared.clone());
+
+        if matches!(kind, OtgKind::Global) {
+            *shared.borrow_mut() = OtgFsState {
+                grstctl: GRSTCTL_AHBIDL,
+                gintsts: GINTSTS_RESET,
+                grxfsiz: 0x0000_0200,
+                dieptxf0: 0x0000_0200,
+                gnptxsts: GNPTXSTS_RESET,
+                cid: CID_RESET,
+                hptxfsiz: 0x0200_0600,
+                dieptxf: [0x0200_0400; 3],
+                dtxfsts: [DTXFSTS_RESET_WORDS; EP_COUNT],
+                event_delay: OTG_STARTUP_EVENT_DELAY,
+                sof_delay: OTG_SOF_PERIOD,
+                ..Default::default()
+            };
+        }
+
+        Some(Box::new(Self { kind, shared }))
+    }
+}
+
+impl OtgFsState {
+    fn maybe_arm_startup_events(&mut self) {
+        if self.startup_stage == StartupStage::Idle
+            && self.gccfg != 0
+            && self.gintmsk != 0
+            && self.gahbcfg & GAHBCFG_GINT != 0
+        {
+            self.startup_stage = StartupStage::UsbReset;
+            self.event_delay = OTG_STARTUP_EVENT_DELAY;
+            self.sof_delay = OTG_SOF_PERIOD;
+        }
+    }
+
+    fn masked_interrupts(&self) -> u32 {
+        self.gintsts & self.gintmsk
+    }
+
+    fn maybe_raise_irq(&self, sys: &System) {
+        sys.p.nvic.borrow_mut().set_intr_pending(OTG_FS_IRQ);
+    }
+
+    fn inject_startup_event(&mut self, mask: u32) {
+        self.gintsts |= mask;
+    }
+
+    fn update_endpoint_summary(&mut self) {
+        let in_pending = self.daint & self.daintmsk & 0x0000_FFFF;
+        let out_pending = self.daint & self.daintmsk & 0xFFFF_0000;
+
+        if in_pending != 0 {
+            self.gintsts |= GINTSTS_IEPINT;
+        } else {
+            self.gintsts &= !GINTSTS_IEPINT;
+        }
+
+        if out_pending != 0 {
+            self.gintsts |= GINTSTS_OEPINT;
+        } else {
+            self.gintsts &= !GINTSTS_OEPINT;
+        }
+    }
+
+    fn mark_in_endpoint_interrupt(&mut self, ep: usize, mask: u32) {
+        if ep >= EP_COUNT {
+            return;
+        }
+        self.diepint[ep] |= mask;
+        self.daint |= 1 << ep;
+        self.update_endpoint_summary();
+    }
+
+    fn mark_out_endpoint_interrupt(&mut self, ep: usize, mask: u32) {
+        if ep >= EP_COUNT {
+            return;
+        }
+        self.doepint[ep] |= mask;
+        self.daint |= 1 << (16 + ep);
+        self.update_endpoint_summary();
+    }
+
+    fn clear_in_endpoint_interrupt(&mut self, ep: usize, mask: u32) {
+        if ep >= EP_COUNT {
+            return;
+        }
+        self.diepint[ep] &= !mask;
+        if self.diepint[ep] == 0 {
+            self.daint &= !(1 << ep);
+        }
+        self.update_endpoint_summary();
+    }
+
+    fn clear_out_endpoint_interrupt(&mut self, ep: usize, mask: u32) {
+        if ep >= EP_COUNT {
+            return;
+        }
+        self.doepint[ep] &= !mask;
+        if self.doepint[ep] == 0 {
+            self.daint &= !(1 << (16 + ep));
+        }
+        self.update_endpoint_summary();
+    }
+
+    fn update_doepctl(&mut self, ep: usize, value: u32) {
+        if ep >= EP_COUNT {
+            return;
+        }
+
+        let mut reg = self.doepctl[ep];
+        reg = (reg & !(DOEPCTL_EPENA | DOEPCTL_USBAEP | DOEPCTL_NAKSTS))
+            | (value & (DOEPCTL_EPENA | DOEPCTL_USBAEP | 0x003F_0000 | 0x7FF));
+
+        if value & DOEPCTL_SNAK != 0 {
+            reg |= DOEPCTL_NAKSTS;
+        }
+        if value & DOEPCTL_CNAK != 0 {
+            reg &= !DOEPCTL_NAKSTS;
+        }
+
+        self.doepctl[ep] = reg;
+
+        if ep == 0
+            && !self.ep0_setup_seen
+            && value & (DOEPCTL_EPENA | DOEPCTL_USBAEP | DOEPCTL_CNAK) != 0
+        {
+            self.ep0_setup_pending = true;
+        }
+    }
+
+    fn update_diepctl(&mut self, ep: usize, value: u32) {
+        if ep >= EP_COUNT {
+            return;
+        }
+
+        let mut reg = self.diepctl[ep];
+        reg = (reg & !(DIEPCTL_EPENA | DIEPCTL_USBAEP | DIEPCTL_NAKSTS))
+            | (value & (DIEPCTL_EPENA | DIEPCTL_USBAEP | 0x03FF_0000 | 0x7FF));
+
+        if value & DIEPCTL_SNAK != 0 {
+            reg |= DIEPCTL_NAKSTS;
+        }
+        if value & DIEPCTL_CNAK != 0 {
+            reg &= !DIEPCTL_NAKSTS;
+        }
+
+        self.diepctl[ep] = reg;
+
+        if value & DIEPCTL_EPENA != 0 {
+            if ep == 0 && self.dieptsiz[ep] != 0 {
+                self.ep0_in_transfer_pending = true;
+            }
+
+            if self.diepempmsk & (1 << ep) != 0 {
+                self.mark_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+            }
+        }
+    }
+
+    fn read_device_endpoint(&self, offset: u32) -> u32 {
+        match offset {
+            0x0100..=0x017f => {
+                let ep = ((offset - 0x0100) / 0x20) as usize;
+                match (offset - 0x0100) % 0x20 {
+                    0x00 => self.diepctl.get(ep).copied().unwrap_or(0),
+                    0x08 => self.diepint.get(ep).copied().unwrap_or(0),
+                    0x10 => self.dieptsiz.get(ep).copied().unwrap_or(0),
+                    0x18 => self.dtxfsts.get(ep).copied().unwrap_or(0),
+                    _ => 0,
+                }
+            }
+            0x0300..=0x037f => {
+                let ep = ((offset - 0x0300) / 0x20) as usize;
+                match (offset - 0x0300) % 0x20 {
+                    0x00 => self.doepctl.get(ep).copied().unwrap_or(0),
+                    0x08 => self.doepint.get(ep).copied().unwrap_or(0),
+                    0x10 => self.doeptsiz.get(ep).copied().unwrap_or(0),
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    fn write_device_endpoint(&mut self, offset: u32, value: u32) -> bool {
+        match offset {
+            0x0100..=0x017f => {
+                let ep = ((offset - 0x0100) / 0x20) as usize;
+                match (offset - 0x0100) % 0x20 {
+                    0x00 => self.update_diepctl(ep, value),
+                    0x08 => self.clear_in_endpoint_interrupt(ep, value),
+                    0x10 => {
+                        if ep < EP_COUNT {
+                            self.dieptsiz[ep] = value;
+                        }
+                    }
+                    _ => {}
+                }
+                true
+            }
+            0x0300..=0x037f => {
+                let ep = ((offset - 0x0300) / 0x20) as usize;
+                match (offset - 0x0300) % 0x20 {
+                    0x00 => self.update_doepctl(ep, value),
+                    0x08 => self.clear_out_endpoint_interrupt(ep, value),
+                    0x10 => {
+                        if ep < EP_COUNT {
+                            self.doeptsiz[ep] = value;
+                        }
+                    }
+                    _ => {}
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn read_global(&mut self, offset: u32) -> u32 {
@@ -134,6 +401,8 @@ impl OtgFs {
             0x010c => self.dieptxf[2] = value,
             _ => {}
         }
+
+        self.maybe_arm_startup_events();
     }
 
     fn read_device(&self, offset: u32) -> u32 {
@@ -145,7 +414,8 @@ impl OtgFs {
             0x0014 => self.doepmsk,
             0x0018 => self.daint,
             0x001c => self.daintmsk,
-            _ => 0,
+            0x0034 => self.diepempmsk,
+            _ => self.read_device_endpoint(offset),
         }
     }
 
@@ -158,18 +428,32 @@ impl OtgFs {
             0x0014 => self.doepmsk = value,
             0x0018 => self.daint &= !value,
             0x001c => self.daintmsk = value,
-            _ => {}
+            0x0034 => {
+                self.diepempmsk = value;
+                for ep in 0..EP_COUNT {
+                    if value & (1 << ep) != 0 && self.diepctl[ep] & DIEPCTL_EPENA != 0 {
+                        self.mark_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+                    }
+                }
+            }
+            _ => {
+                if !self.write_device_endpoint(offset, value) {
+                    return;
+                }
+            }
         }
+
+        self.update_endpoint_summary();
     }
 }
 
 impl Peripheral for OtgFs {
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match self.kind {
-            OtgKind::Global => self.read_global(offset),
-            OtgKind::Device => self.read_device(offset),
+            OtgKind::Global => self.shared.borrow_mut().read_global(offset),
+            OtgKind::Device => self.shared.borrow().read_device(offset),
             OtgKind::PwrClk => match offset {
-                0x0000 => self.pcgcctl,
+                0x0000 => self.shared.borrow().pcgcctl,
                 _ => 0,
             },
         }
@@ -177,13 +461,85 @@ impl Peripheral for OtgFs {
 
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
         match self.kind {
-            OtgKind::Global => self.write_global(offset, value),
-            OtgKind::Device => self.write_device(offset, value),
+            OtgKind::Global => self.shared.borrow_mut().write_global(offset, value),
+            OtgKind::Device => self.shared.borrow_mut().write_device(offset, value),
             OtgKind::PwrClk => {
                 if offset == 0x0000 {
-                    self.pcgcctl = value;
+                    self.shared.borrow_mut().pcgcctl = value;
                 }
             }
+        }
+    }
+
+    fn step(&mut self, sys: &System) {
+        if !matches!(self.kind, OtgKind::Global) {
+            return;
+        }
+
+        let mut shared = self.shared.borrow_mut();
+
+        shared.maybe_arm_startup_events();
+
+        match shared.startup_stage {
+            StartupStage::Idle => {}
+            StartupStage::UsbReset => {
+                if shared.gintsts & GINTSTS_USBRST == 0 {
+                    if shared.event_delay > 0 {
+                        shared.event_delay -= 1;
+                    } else {
+                        shared.inject_startup_event(GINTSTS_SRQINT | GINTSTS_USBRST);
+                        shared.startup_stage = StartupStage::EnumDone;
+                        shared.event_delay = OTG_STARTUP_EVENT_DELAY;
+                    }
+                }
+            }
+            StartupStage::EnumDone => {
+                if shared.gintsts & (GINTSTS_SRQINT | GINTSTS_USBRST) == 0 {
+                    if shared.event_delay > 0 {
+                        shared.event_delay -= 1;
+                    } else {
+                        shared.inject_startup_event(GINTSTS_ENUMDNE);
+                        shared.startup_stage = StartupStage::Running;
+                        shared.sof_delay = OTG_SOF_PERIOD;
+                    }
+                }
+            }
+            StartupStage::Running => {
+                if shared.gintmsk & GINTSTS_SOF != 0 && shared.gintsts & GINTSTS_SOF == 0 {
+                    if shared.sof_delay > 0 {
+                        shared.sof_delay -= 1;
+                    } else {
+                        shared.inject_startup_event(GINTSTS_SOF);
+                        shared.sof_delay = OTG_SOF_PERIOD;
+                    }
+                }
+            }
+        }
+
+        if shared.ep0_setup_pending
+            && shared.doeptsiz[0] != 0
+            && shared.doepctl[0] & (DOEPCTL_USBAEP | DOEPCTL_CNAK | DOEPCTL_EPENA) != 0
+        {
+            shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP | DOEPINT_XFRC);
+            shared.ep0_setup_pending = false;
+            shared.ep0_setup_seen = true;
+        }
+
+        if shared.ep0_in_transfer_pending
+            && shared.dieptsiz[0] & 0x7f == 0
+            && shared.diepctl[0] & DIEPCTL_EPENA != 0
+        {
+            shared.clear_in_endpoint_interrupt(0, DIEPINT_TXFE);
+            shared.mark_in_endpoint_interrupt(0, DIEPINT_XFRC);
+            shared.diepctl[0] &= !DIEPCTL_EPENA;
+            shared.ep0_in_transfer_pending = false;
+        }
+
+        if shared.gahbcfg & GAHBCFG_GINT == 0 || shared.masked_interrupts() == 0 {
+            shared.irq_latched = false;
+        } else if !shared.irq_latched {
+            shared.maybe_raise_irq(sys);
+            shared.irq_latched = true;
         }
     }
 }
