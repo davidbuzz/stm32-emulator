@@ -97,3 +97,12 @@ A boot-progress fix is considered demonstrably good when:
 - the targeted warning/error class is removed or reduced,
 - execution advances stably for a materially longer run window,
 - and the change is traceable to documented STM32F4 behavior or board config requirements.
+
+## Concrete success marker
+
+Treat the CubeBlack/ArduPilot deliverable as reached only when all of the following are true:
+
+- A bounded run to at least `100000000` instructions completes without `WARN` or `ERROR` log lines and without `peri=????` unknown peripheral accesses.
+- The early idle-loop probe at `0x08161148` is no longer a terminal state: a run with interrupt tracing shows at least one wake event/return sequence (`TIM5` IRQ 50 pending, interrupt dispatch, and return).
+- Firmware emits at least one recognizable runtime console line through configured USART probes, or an equivalent deterministic runtime milestone is captured and documented in `FEATURE_GAP.md`.
+- The validation report records the exact command(s), stop reason or final instruction count, and why the observed marker demonstrates boot/runtime progress rather than a passive loop.
