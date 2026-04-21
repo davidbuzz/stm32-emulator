@@ -1,0 +1,85 @@
+# AGENTS.md
+
+Repository guidance for AI coding agents working in this project.
+
+## Project intent
+
+- Primary objective: emulate STM32 boards well enough to boot and run unmodified firmware.
+- Current focus board: CubeBlack (STM32F427) and ArduPilot binaries in cubeblack/.
+- Treat behavioral correctness as higher priority than perfect hardware cycle accuracy.
+
+## First steps on each task
+
+- Read the active board config before changing emulator behavior.
+- Reproduce current behavior with a bounded run before editing code.
+- Capture concrete evidence: instruction count reached, stop PC, and warning classes.
+
+## Known working run commands
+
+- Setup Ubuntu dev environment:
+  - ./DEV_SETUP_UBUNTU.sh
+- Run CubeBlack directly:
+  - cd cubeblack
+  - ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+- Detect tight loops:
+  - ../target/release/stm32-emulator config.yaml -v --busy-loop-stop
+
+## Boot-debug workflow
+
+1. Reproduce with max-instructions and record logs.
+2. Classify blockers:
+   - unmapped memory access
+   - missing peripheral register semantics
+   - missing interrupt behavior
+   - firmware waits on status flags
+3. Fix one blocker at a time.
+4. Re-run and compare logs against baseline.
+5. Keep changes minimal and board-targeted when possible.
+
+## STM32F4 reference docs in this repo
+
+- cubeblack/STM32F4xx_Reference_Manual.md
+- cubeblack/stm32f427vg-datasheet.md
+- cubeblack/STM32F4_DMA.md
+
+Use these local docs as the source of truth for register behavior and memory layout.
+
+## Emulator implementation guidance
+
+- Prefer implementing realistic register read/write behavior over bypass patches.
+- For DMA on STM32F4:
+  - Keep stream register decode aligned with offset 0x10 + n*0x18.
+  - Model status/clear flag behavior (LISR/HISR and LIFCR/HIFCR) when firmware polls completion.
+  - Maintain EN and NDTR transitions expected by polling loops.
+- Preserve existing public interfaces unless a task requires refactoring.
+
+## Config and memory-map guidance
+
+- Favor adding missing memory regions in board config over skipping instructions.
+- For STM32F427 boards, account for CCM RAM and system memory/UID areas when firmware touches them.
+- Keep firmware patch entries in config.yaml documented with why they exist.
+
+## Validation expectations
+
+- After each meaningful change:
+  - run a short bounded test (for fast feedback)
+  - run a longer stability test (to confirm no regression)
+- Report:
+  - command used
+  - final instruction count or stop reason
+  - whether warning classes improved, regressed, or stayed the same
+
+## Editing guardrails
+
+- Do not revert unrelated user changes.
+- Avoid destructive git operations.
+- Keep commits focused and small.
+- Prefer targeted patches over broad cleanup.
+
+## Done criteria for boot tasks
+
+A boot-progress fix is considered demonstrably good when:
+
+- the targeted warning/error class is removed or reduced,
+- execution advances stably for a materially longer run window,
+- and the change is traceable to documented STM32F4 behavior or board config requirements.
