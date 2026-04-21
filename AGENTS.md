@@ -51,6 +51,27 @@ Repository guidance for AI coding agents working in this project.
 
 Use these local docs as the source of truth for register behavior and memory layout.
 
+## ArduPilot source code
+
+The full ArduPilot source tree is available as a git submodule:
+
+- ArduPilot root: `./modules/ardupilot/`
+- ChibiOS (RTOS for CubeBlack): `./modules/ardupilot/modules/ChibiOS/`
+
+Use this for cross-referencing firmware behavior, ISR logic, USB driver internals (see `modules/ardupilot/modules/ChibiOS/os/hal/ports/STM32/LLD/OTGv1/`), and understanding how ChibiOS polls peripheral registers.
+
+### Rebuilding the CubeBlack binary from source
+
+```bash
+cd modules/ardupilot
+# Ensure prerequisites are met (see Tools/*prereq* scripts)
+./waf configure --board=CubeBlack --debug
+./waf copter
+ls build/CubeBlack/bin/*
+cp build/CubeBlack/bin/* ../../cubeblack/
+cd ../..
+```
+
 ## Emulator implementation guidance
 
 - Prefer implementing realistic register read/write behavior over bypass patches.

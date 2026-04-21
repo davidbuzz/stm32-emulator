@@ -55,6 +55,27 @@ Use these docs before implementing peripheral/register behavior:
 - cubeblack/stm32f427vg-datasheet.md
 - cubeblack/STM32F4_DMA.md
 
+## ArduPilot / ChibiOS Source Code
+
+The full ArduPilot source is available at `./modules/ardupilot/` (git submodule).
+ChibiOS for CubeBlack is at `./modules/ardupilot/modules/ChibiOS/`.
+
+Key paths for USB/peripheral debugging:
+- OTG FS HAL driver: `modules/ardupilot/modules/ChibiOS/os/hal/ports/STM32/LLD/OTGv1/`
+- Board config: `modules/ardupilot/libraries/AP_HAL_ChibiOS/hwdef/CubeBlack/`
+
+### Build CubeBlack binary from source
+
+```bash
+cd modules/ardupilot
+# Ensure prerequisites are met (see Tools/*prereq* scripts)
+./waf configure --board=CubeBlack --debug
+./waf copter
+ls build/CubeBlack/bin/*
+cp build/CubeBlack/bin/* ../../cubeblack/
+cd ../..
+```
+
 ## Standard Debug Workflow
 
 1. Reproduce with bounded run.
