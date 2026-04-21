@@ -97,7 +97,51 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         sys.uc.borrow_mut().add_code_hook(0, u64::MAX, move |uc, pc, size| {
             unsafe {
                 if busy_loop_stop && LAST_INSTRUCTION.0 == pc as u32 {
-                    info!("Busy loop reached");
+                    let sp = uc.reg_read(RegisterARM::SP).unwrap_or(0);
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+                    let r2 = uc.reg_read(RegisterARM::R2).unwrap_or(0);
+                    let r3 = uc.reg_read(RegisterARM::R3).unwrap_or(0);
+                    let r4 = uc.reg_read(RegisterARM::R4).unwrap_or(0);
+                    let r5 = uc.reg_read(RegisterARM::R5).unwrap_or(0);
+                    let r6 = uc.reg_read(RegisterARM::R6).unwrap_or(0);
+                    let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
+                    info!("Busy loop reached pc=0x{:08x} sp=0x{:08x} lr=0x{:08x} r0=0x{:08x} r1=0x{:08x} r2=0x{:08x} r3=0x{:08x} r4=0x{:08x} r5=0x{:08x} r6=0x{:08x} r7=0x{:08x}",
+                        pc, sp, lr, r0, r1, r2, r3, r4, r5, r6, r7);
+                    if r1 != 0 {
+                        let mut buf = [0u8; 64];
+                        if uc.mem_read(r1, &mut buf).is_ok() {
+                            let words = (0..16)
+                                .map(|i| {
+                                    let o = i * 4;
+                                    u32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]])
+                                })
+                                .collect::<Vec<_>>();
+                            info!(
+                                "Busy loop ctx @r1=0x{:08x}: [{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}]",
+                                r1,
+                                words[0], words[1], words[2], words[3],
+                                words[4], words[5], words[6], words[7],
+                                words[8], words[9], words[10], words[11],
+                                words[12], words[13], words[14], words[15]
+                            );
+                        }
+                    }
+
+                    let ctx_base = sp.saturating_sub(100);
+                    let mut ctx = [0u8; 104];
+                    if uc.mem_read(ctx_base, &mut ctx).is_ok() {
+                        let read_word = |off: usize| -> u32 {
+                            u32::from_le_bytes([ctx[off], ctx[off + 1], ctx[off + 2], ctx[off + 3]])
+                        };
+                        info!(
+                            "Busy loop restore frame base=0x{:08x} r4=0x{:08x} r5=0x{:08x} r6=0x{:08x} r7=0x{:08x} r8=0x{:08x} sb=0x{:08x} sl=0x{:08x} fp=0x{:08x} pc=0x{:08x}",
+                            ctx_base,
+                            read_word(64), read_word(68), read_word(72), read_word(76),
+                            read_word(80), read_word(84), read_word(88), read_word(92), read_word(96)
+                        );
+                    }
                     uc.emu_stop().unwrap();
                     BUSY_LOOP_REACHED.store(true, Ordering::Release);
                 }
