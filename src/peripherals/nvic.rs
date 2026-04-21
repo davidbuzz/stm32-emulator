@@ -291,15 +291,14 @@ impl Nvic {
         let mut sp = uc.reg_read(sp_reg).unwrap();
 
         if fpca {
+            // ARMv7-M extended frame layout (low→high): R0..XPSR | S0..S15, FPSCR | Reserved
+            // Push Reserved first so it lands at the highest address in the FP section.
+            Self::push_word(uc, &mut sp, Self::FP_EXTENDED_FRAME_RESERVED_WORD);
+
             for reg in Self::CONTEXT_REGS_EXTENDED {
                 let value = uc.reg_read(reg).unwrap() as u32;
                 Self::push_word(uc, &mut sp, value);
             }
-
-            // ARMv7-M extended FP frames include one reserved word in addition to
-            // S0-S15 and FPSCR. ChibiOS advances PSP by 104 bytes in its SVC path,
-            // so omitting this word misaligns subsequent thread restore frames.
-            Self::push_word(uc, &mut sp, Self::FP_EXTENDED_FRAME_RESERVED_WORD);
         }
         for reg in Self::CONTEXT_REGS {
             let value = uc.reg_read(reg).unwrap() as u32;
@@ -317,12 +316,13 @@ impl Nvic {
             uc.reg_write(*reg, value as u64).unwrap();
         }
         if fpca {
-            let _reserved = Self::pop_word(uc, &mut sp);
-
             for reg in Self::CONTEXT_REGS_EXTENDED.iter().rev() {
                 let value = Self::pop_word(uc, &mut sp);
                 uc.reg_write(*reg, value as u64).unwrap();
             }
+
+            // Reserved word is at the top of the FP section (highest address)
+            let _reserved = Self::pop_word(uc, &mut sp);
         }
         uc.reg_write(sp_reg, sp).unwrap();
     }
