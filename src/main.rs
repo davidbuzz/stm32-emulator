@@ -57,6 +57,10 @@ pub struct Args {
     /// Dump stack at the end. Parameter is the number of words to print
     #[clap(short, long)]
     dump_stack: Option<usize>,
+
+    /// Print only ArduPilot console output (USB CDC EP1). Suppresses all emulator log noise.
+    #[clap(long)]
+    console_only: bool,
 }
 
 #[derive(clap::ArgEnum, Clone, Copy, Debug)]
@@ -77,18 +81,28 @@ impl std::convert::From<Color> for WriteStyle {
 }
 
 static mut VERBOSE: u8 = 0;
+static mut CONSOLE_ONLY: bool = false;
 
 pub fn verbose() -> u8 {
     unsafe { VERBOSE }
 }
 
+pub fn console_only() -> bool {
+    unsafe { CONSOLE_ONLY }
+}
+
 fn init_logging(args: &Args) {
     unsafe { VERBOSE = args.verbose };
+    unsafe { CONSOLE_ONLY = args.console_only };
 
-    let lf = match args.verbose {
-        0 => LevelFilter::Info,
-        1 => LevelFilter::Debug,
-        _ => LevelFilter::Trace,
+    let lf = if args.console_only {
+        LevelFilter::Off
+    } else {
+        match args.verbose {
+            0 => LevelFilter::Info,
+            1 => LevelFilter::Debug,
+            _ => LevelFilter::Trace,
+        }
     };
 
     static mut LAST_NUM_INSTRUCTIONS: u64 = 0;

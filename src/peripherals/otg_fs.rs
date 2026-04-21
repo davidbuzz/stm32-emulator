@@ -642,15 +642,9 @@ impl Peripheral for OtgFs {
                     shared.irq_latched = false;
                 } else if txfe_done || !shared.cdc_line_buf.is_empty() {
                     // TXFE handled (firmware cleared DIEPEMPMSK after filling FIFO),
-                    // or direct-fill path left data in the buffer.
-                    // Flush any partial CDC line, then fire XFRC.
-                    if !shared.cdc_line_buf.is_empty() {
-                        let line = String::from_utf8_lossy(&shared.cdc_line_buf).trim().to_string();
-                        if !line.is_empty() {
-                            info!("USB-CDC ep{} '{}'", ep, line);
-                        }
-                        shared.cdc_line_buf.clear();
-                    }
+                    // or direct-fill path. Fire XFRC; line buffer is flushed by
+                    // newline/null bytes in fifo_write, not here, so multi-packet
+                    // messages accumulate into a single line naturally.
                     shared.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
                     shared.mark_in_endpoint_interrupt(ep, DIEPINT_XFRC);
                     shared.diepctl[ep] &= !DIEPCTL_EPENA;
@@ -710,15 +704,23 @@ pub fn fifo_write(ep: usize, word: u32) {
                     let line = String::from_utf8_lossy(&s.cdc_line_buf);
                     let line_owned = line.trim().to_string();
                     if !line_owned.is_empty() {
-                        info!("USB-CDC ep{} '{}'", ep, line_owned);
+                        if crate::console_only() {
+                            println!("{}", line_owned);
+                        } else {
+                            info!("USB-CDC ep{} '{}'", ep, line_owned);
+                        }
                     }
                     s.cdc_line_buf.clear();
                 }
             } else {
                 s.cdc_line_buf.push(b);
                 if s.cdc_line_buf.len() >= 256 {
-                    let line = String::from_utf8_lossy(&s.cdc_line_buf);
-                    info!("USB-CDC ep{} '{}'", ep, line.trim());
+                    let line = String::from_utf8_lossy(&s.cdc_line_buf).trim().to_string();
+                    if crate::console_only() {
+                        println!("{}", line);
+                    } else {
+                        info!("USB-CDC ep{} '{}'", ep, line);
+                    }
                     s.cdc_line_buf.clear();
                 }
             }
