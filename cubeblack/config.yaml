@@ -157,12 +157,17 @@ patches:
   # NOP the two osalThreadSleepMicroseconds(10000) calls in SDIO ACMD41 retry loop.
   # Each BL is 4 bytes (T1+T2 halfwords); replace with two Thumb16 NOPs (0x00 0xBF each).
   # SDC_INIT_RETRY=100 x 2 branch paths x 10ms = 200 x 10ms = ~333M wasted instructions.
-  # Call site 1 (CMD1 path): 0x0815772a
+  # NOP mmc_init sleep (CMD1 path): osalThreadSleepMilliseconds(10) before CMD1 retry
   - start: 0x0815772a
     data: [0x00, 0xbf, 0x00, 0xbf]
-  # Call site 2 (ACMD41 path): 0x08157762
+  # NOP sdc_init sleep (ACMD41 path): osalThreadSleepMilliseconds(10) in ACMD41 retry loop
   - start: 0x08157762
     data: [0x00, 0xbf, 0x00, 0xbf]
+  # Skip sdc_lld_start_clk clock activation delay: tail-call B.W to osalThreadSleep(10ms).
+  # Replace with BX LR so the function returns immediately without sleeping.
+  # Called on every sdcConnect attempt (3x per sdcard_init call, ~1000x total during SD init).
+  - start: 0x08155ef8
+    data: [0x70, 0x47, 0x00, 0xbf]
 
   # Nop the fpga not being there
   #- start: 0x08041F92
