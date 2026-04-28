@@ -140,6 +140,8 @@ If you need to update the bootloader image used by the emulator as well, copy `b
 - Do not treat "I fixed one thing and now I can see the next thing" as a natural stopping point.
 - If the operator says `continue`, interpret that as immediate authorization to keep working on the next concrete debugging step.
 - Only hand off after documenting the state in `FEATURE_GAP.md` when further progress is blocked by something external or the operator explicitly wants a pause.
+- Do not treat a passing validation run, a documented milestone, or a reminder about `task_complete` as a stop signal while the repo TODO list remains open or `FEATURE_GAP.md` still offers an actionable next step.
+- Only end the task when the operator asked to stop, or when both the current TODO list and the next actionable `FEATURE_GAP.md` item are complete or externally blocked.
 
 ## Common CubeBlack Blockers
 
@@ -220,3 +222,5 @@ A fix is demonstrably good when:
 3. The change is traceable to STM32F4 documented behavior or required board memory map.
 
 This confirms progress. It does not by itself end the overall boot task when the next blocker is already visible and actionable.
+
+If the repo TODO list still has unchecked items, the task is still in progress even if the latest fix validated cleanly.

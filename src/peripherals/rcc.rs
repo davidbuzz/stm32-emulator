@@ -13,14 +13,111 @@ use crate::system::System;
 use super::Peripheral;
 
 pub struct Rcc {
+    cr: u32,
+    pllcfgr: u32,
+    cfgr: u32,
+    cir: u32,
+    ahb1rstr: u32,
+    ahb2rstr: u32,
+    ahb3rstr: u32,
+    apb1rstr: u32,
+    apb2rstr: u32,
+    ahb1enr: u32,
+    ahb2enr: u32,
+    ahb3enr: u32,
+    apb1enr: u32,
+    apb2enr: u32,
+    ahb1lpenr: u32,
+    ahb2lpenr: u32,
+    ahb3lpenr: u32,
+    apb1lpenr: u32,
+    apb2lpenr: u32,
+    bdcr: u32,
+    csr: u32,
+    sscgr: u32,
+    plli2scfgr: u32,
+    pllsaicfgr: u32,
+    dckcfgr: u32,
 }
 
 impl Rcc {
     pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
         if name == "RCC" {
-            Some(Box::new(Rcc {}))
+            Some(Box::new(Rcc {
+                // Reset values chosen to satisfy STM32F4 startup polling with immediate-ready semantics.
+                cr: 0x0000_0083,
+                pllcfgr: 0x2400_3010,
+                cfgr: 0,
+                cir: 0,
+                ahb1rstr: 0,
+                ahb2rstr: 0,
+                ahb3rstr: 0,
+                apb1rstr: 0,
+                apb2rstr: 0,
+                ahb1enr: 0,
+                ahb2enr: 0,
+                ahb3enr: 0,
+                apb1enr: 0,
+                apb2enr: 0,
+                ahb1lpenr: 0,
+                ahb2lpenr: 0,
+                ahb3lpenr: 0,
+                apb1lpenr: 0,
+                apb2lpenr: 0,
+                bdcr: 0,
+                csr: 0x0e00_0000,
+                sscgr: 0,
+                plli2scfgr: 0x2000_3000,
+                pllsaicfgr: 0x2400_3000,
+                dckcfgr: 0,
+            }))
         } else {
             None
+        }
+    }
+
+    fn update_cr_ready_bits(&mut self) {
+        const HSION: u32 = 1 << 0;
+        const HSIRDY: u32 = 1 << 1;
+        const HSEON: u32 = 1 << 16;
+        const HSERDY: u32 = 1 << 17;
+        const PLLON: u32 = 1 << 24;
+        const PLLRDY: u32 = 1 << 25;
+
+        if self.cr & HSION != 0 {
+            self.cr |= HSIRDY;
+        } else {
+            self.cr &= !HSIRDY;
+        }
+
+        if self.cr & HSEON != 0 {
+            self.cr |= HSERDY;
+        } else {
+            self.cr &= !HSERDY;
+        }
+
+        if self.cr & PLLON != 0 {
+            self.cr |= PLLRDY;
+        } else {
+            self.cr &= !PLLRDY;
+        }
+    }
+
+    fn update_cfgr_status_bits(&mut self) {
+        const SW_MASK: u32 = 0b11;
+        const SWS_MASK: u32 = 0b11 << 2;
+        let sw = self.cfgr & SW_MASK;
+        self.cfgr = (self.cfgr & !SWS_MASK) | (sw << 2);
+    }
+
+    fn update_csr_ready_bits(&mut self) {
+        const LSION: u32 = 1 << 0;
+        const LSIRDY: u32 = 1 << 1;
+
+        if self.csr & LSION != 0 {
+            self.csr |= LSIRDY;
+        } else {
+            self.csr &= !LSIRDY;
         }
     }
 }
@@ -29,20 +126,75 @@ impl Rcc {
 impl Peripheral for Rcc {
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match offset {
-            0x0000 => {
-                // CR register
-                // Return all the r to true. This is where the PLL ready flags are.
-                //0b0010_0000_0010_0000_0000_0000_0010
-                0xFFFF_FFFF
+            0x0000 => self.cr,
+            0x0004 => self.pllcfgr,
+            0x0008 => self.cfgr,
+            0x000c => self.cir,
+            0x0010 => self.ahb1rstr,
+            0x0014 => self.ahb2rstr,
+            0x0018 => self.ahb3rstr,
+            0x0020 => self.apb1rstr,
+            0x0024 => self.apb2rstr,
+            0x0030 => self.ahb1enr,
+            0x0034 => self.ahb2enr,
+            0x0038 => self.ahb3enr,
+            0x0040 => self.apb1enr,
+            0x0044 => self.apb2enr,
+            0x0050 => self.ahb1lpenr,
+            0x0054 => self.ahb2lpenr,
+            0x0058 => self.ahb3lpenr,
+            0x0060 => self.apb1lpenr,
+            0x0064 => self.apb2lpenr,
+            0x0070 => self.bdcr,
+            0x0074 => {
+                self.update_csr_ready_bits();
+                self.csr
             }
-            0x0008 => {
-                // CFGR register
-                0b1000
-            }
+            0x0080 => self.sscgr,
+            0x0084 => self.plli2scfgr,
+            0x0088 => self.pllsaicfgr,
+            0x008c => self.dckcfgr,
             _ => 0
         }
     }
 
-    fn write(&mut self, _sys: &System, _offset: u32, _value: u32) {
+    fn write(&mut self, _sys: &System, offset: u32, value: u32) {
+        match offset {
+            0x0000 => {
+                self.cr = value;
+                self.update_cr_ready_bits();
+            }
+            0x0004 => self.pllcfgr = value,
+            0x0008 => {
+                self.cfgr = value;
+                self.update_cfgr_status_bits();
+            }
+            0x000c => self.cir = value,
+            0x0010 => self.ahb1rstr = value,
+            0x0014 => self.ahb2rstr = value,
+            0x0018 => self.ahb3rstr = value,
+            0x0020 => self.apb1rstr = value,
+            0x0024 => self.apb2rstr = value,
+            0x0030 => self.ahb1enr = value,
+            0x0034 => self.ahb2enr = value,
+            0x0038 => self.ahb3enr = value,
+            0x0040 => self.apb1enr = value,
+            0x0044 => self.apb2enr = value,
+            0x0050 => self.ahb1lpenr = value,
+            0x0054 => self.ahb2lpenr = value,
+            0x0058 => self.ahb3lpenr = value,
+            0x0060 => self.apb1lpenr = value,
+            0x0064 => self.apb2lpenr = value,
+            0x0070 => self.bdcr = value,
+            0x0074 => {
+                self.csr = value;
+                self.update_csr_ready_bits();
+            }
+            0x0080 => self.sscgr = value,
+            0x0084 => self.plli2scfgr = value,
+            0x0088 => self.pllsaicfgr = value,
+            0x008c => self.dckcfgr = value,
+            _ => {}
+        }
     }
 }

@@ -10,6 +10,8 @@
 // Reference anchors: STM32F427 SVD plus the Cortex-M private-peripheral map.
 
 pub mod rcc;
+pub mod pwr;
+pub mod flash;
 pub mod spi;
 pub mod usart;
 pub mod systick;
@@ -26,6 +28,8 @@ pub mod sdio;
 pub mod tim;
 
 use rcc::*;
+use pwr::*;
+use flash::*;
 use serde::Deserialize;
 use spi::*;
 use usart::*;
@@ -97,7 +101,9 @@ impl Peripherals {
             .or_else(||        Gpio::new(&name))
             .or_else(||       Usart::new(&name, ext_devices))
             .or_else(||        Fsmc::new(&name, ext_devices))
+            .or_else(||       Flash::new(&name))
             .or_else(||         Rcc::new(&name))
+            .or_else(||         Pwr::new(&name))
             .or_else(||         I2c::new(&name))
             .or_else(||         Dma::new(&name))
             .or_else(||       OtgFs::new(&name))

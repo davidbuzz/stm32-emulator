@@ -54,7 +54,7 @@ impl Ramtron {
         Ok(Self {
             config,
             name: String::new(),
-            storage: vec![0xFF; RAMTRON_SIZE],
+            storage: vec![0; RAMTRON_SIZE],
             state: State::Idle,
             write_enabled: false,
             cs_active: true,  // CS starts high (inactive)

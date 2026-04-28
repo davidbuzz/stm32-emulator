@@ -85,6 +85,8 @@ cd cubeblack
 - If the operator sends `continue`, resume the next concrete step immediately; do not treat it as a prompt to summarize and stop.
 - Only stop when the operator asks to stop, or when the next step is blocked by something external that cannot be resolved inside the repo.
 - `FEATURE_GAP.md` is the backlog and handover document when a handoff is required; it is not a stop signal by itself.
+- A clean bounded validation run or a reminder to call `task_complete` is not, by itself, a stop condition when the TODO list is still open or `FEATURE_GAP.md` still contains an actionable next blocker.
+- Only call `task_complete` after the operator asked to end, or when the current TODO list and the next actionable `FEATURE_GAP.md` work item are both finished or genuinely externally blocked.
 
 ## Reference docs
 
@@ -141,6 +143,7 @@ Run a short bounded test for fast feedback, then a longer stability test to conf
 When maintaining a TODO list, always end it with:
   - `git commit your changes, assess all un-comitted changes, not just your recent edits`
 - `refer to FEATURE_GAP.md afterwards to get more work to do`
+- Treat any unchecked TODO entry as proof that the session is still in progress; do not stop at an intermediate milestone while TODO work remains.
 
 ## Done criteria for boot tasks
 

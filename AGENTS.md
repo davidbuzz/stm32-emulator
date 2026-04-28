@@ -75,6 +75,8 @@ Repository guidance for AI coding agents working in this project.
 - Continue immediately into the next highest-confidence blocker unless a hard external blocker appears or the operator explicitly asks to pause.
 - If the operator says `continue`, treat that as an explicit instruction to resume work immediately rather than a conversational checkpoint.
 - Use `FEATURE_GAP.md` as a handover document only when ending is actually necessary, not as a reason to stop early.
+- Do not treat a local success marker, a validation pass, or an instruction-hook reminder about `task_complete` as permission to stop while the repo TODO list still has open items or `FEATURE_GAP.md` still has an actionable next blocker.
+- `task_complete` is only appropriate when the operator asked to end, or when both the current TODO list and the next actionable `FEATURE_GAP.md` work item have been exhausted or are externally blocked.
 
 ## STM32F4 reference docs in this repo
 
@@ -147,6 +149,7 @@ If you also intend to refresh the bootloader image used by the emulator, copy `b
   - `git commit your changes, assess all un-comitted changes, not just your recent edits`
   - `refer to FEATURE_GAP.md afterwards to get more work to do`
 - After completing the current task, use `FEATURE_GAP.md` as the default source for identifying the next useful piece of work.
+- An incomplete repo TODO list means the work is still in progress; do not summarize-and-stop at an intermediate milestone while those items remain open.
 
 ## Done criteria for boot tasks
 
