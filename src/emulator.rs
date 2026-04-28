@@ -216,8 +216,21 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     p.nvic.borrow_mut().return_from_interrupt(&sys);
                     p.nvic.borrow_mut().run_pending_interrupts(&sys);
                 }
-                3 => {
-                    error!("intr_hook intno={:08x}", exception);
+                3 | 4 => {
+                    // EXCP_PREFETCH_ABORT (3) or EXCP_DATA_ABORT (4): fatal fault in emulated CPU.
+                    // Logging and continuing causes Unicorn to retry the faulting instruction
+                    // forever, producing unbounded output. Exit immediately.
+                    // pc=0x55555554 means stack overflow (ChibiOS fill pattern 0x55555555 loaded as PC).
+                    let pc = uc.reg_read(unicorn_engine::RegisterARM::PC).unwrap_or(0);
+                    let sp = uc.reg_read(unicorn_engine::RegisterARM::SP).unwrap_or(0);
+                    let lr = uc.reg_read(unicorn_engine::RegisterARM::LR).unwrap_or(0);
+                    let r0 = uc.reg_read(unicorn_engine::RegisterARM::R0).unwrap_or(0);
+                    error!("intr_hook intno={:08x} (fatal fault) pc=0x{:08x} sp=0x{:08x} lr=0x{:08x} r0=0x{:08x}",
+                        exception, pc, sp, lr, r0);
+                    if pc == 0x55555554 {
+                        error!("Stack overflow detected (ChibiOS fill pattern at PC). Thread stack exhausted.");
+                    }
+                    std::process::exit(1);
                 }
                 _ => {
                     error!("intr_hook intno={:08x}", exception);
@@ -234,8 +247,9 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             warn!("{:?} addr=0x{:08x} size={}", type_, addr, size);
         }
 
+        let pc = uc.reg_read(RegisterARM::PC).expect("failed to get pc");
+
         unsafe {
-            let pc = uc.reg_read(RegisterARM::PC).expect("failed to get pc");
             if pc as u32 == LAST_INSTRUCTION.0 {
                 uc.reg_write(RegisterARM::PC, thumb(pc as u64 + LAST_INSTRUCTION.1 as u64)).unwrap();
             } else {

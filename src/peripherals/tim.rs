@@ -73,10 +73,17 @@ impl Tim {
             return;
         }
 
+        let old_cnt = self.cnt;
         self.cnt = self.cnt.wrapping_add(ticks);
 
-        // Minimal compare behavior used by polling/timeout loops.
-        if (self.dier & (1 << 1)) != 0 && self.cnt >= self.ccr1 {
+        // Fire compare once when the counter crosses CCR1; the status flag
+        // remains set until firmware clears it via SR.
+        let crossed_ccr1 = if old_cnt <= self.cnt {
+            old_cnt < self.ccr1 && self.ccr1 <= self.cnt
+        } else {
+            old_cnt < self.ccr1 || self.ccr1 <= self.cnt
+        };
+        if (self.dier & (1 << 1)) != 0 && (self.sr & (1 << 1)) == 0 && crossed_ccr1 {
             self.sr |= 1 << 1;
             if let Some(irq) = self.irq_number() {
                 debug!("{} CC1 compare fired cnt=0x{:08x} ccr1=0x{:08x} -> IRQ {}", self.name, self.cnt, self.ccr1, irq);
