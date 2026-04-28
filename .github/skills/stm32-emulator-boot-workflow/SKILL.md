@@ -57,6 +57,34 @@ cd cubeblack
 ../target/release/stm32-emulator config.yaml -v --max-instructions 20000000
 ```
 
+## Execution Budgeting
+
+- Prefer `/usr/bin/time` for emulator runs so reports include wall-clock cost.
+- Prefer `timeout` for probes that may not terminate promptly.
+- Measured on the current workspace state:
+  - `--max-instructions 3000000`: about `1.3s`
+  - `--max-instructions 120000000`: about `47s`
+  - `--busy-loop-stop`: timed out at `30s` / about `70.9M` instructions in one probe
+- Working defaults:
+  - short feedback runs: `timeout 30`
+  - longer bounded runs up to `120000000` instructions: `timeout 120`
+  - `--busy-loop-stop`: `timeout 30` unless you are deliberately letting it run longer
+
+Example wrappers:
+
+```bash
+cd cubeblack
+
+/usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
+  timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+
+/usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
+  timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000
+
+/usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
+  timeout 30 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop
+```
+
 ## Reference Documents (Local Source of Truth)
 
 Use these docs before implementing peripheral/register behavior:

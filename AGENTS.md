@@ -39,6 +39,23 @@ Repository guidance for AI coding agents working in this project.
 - Detect tight loops:
   - ../target/release/stm32-emulator config.yaml -v --busy-loop-stop
 
+## Execution budgeting
+
+- Prefer wrapping emulator runs with `/usr/bin/time` so validation reports include wall-clock cost.
+- Prefer `timeout` for exploratory probes that may not terminate promptly.
+- Current measured runtimes on this workspace state:
+  - `--max-instructions 3000000` completes in about `1.3s`
+  - `--max-instructions 120000000` completes in about `47s`
+  - `--busy-loop-stop` did not converge quickly in one probe and was cut off at `30s` / about `70.9M` instructions
+- Practical defaults:
+  - short bounded runs: `timeout 30`
+  - longer bounded validation runs up to `120000000` instructions: `timeout 120`
+  - `--busy-loop-stop` and other open-ended probes: always wrap in `timeout 30` unless there is a specific reason not to
+- Recommended command forms:
+  - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000`
+  - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000`
+  - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop`
+
 ## Boot-debug workflow
 
 1. Reproduce with max-instructions and record logs.

@@ -42,6 +42,34 @@ cd cubeblack
 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop
 ```
 
+## Execution Budgeting
+
+- Wrap emulator runs with `/usr/bin/time` when validating so runtime cost is visible in the log.
+- Wrap exploratory or potentially open-ended probes with `timeout`.
+- Measured on the current workspace state:
+  - `--max-instructions 3000000` takes about `1.3s`
+  - `--max-instructions 120000000` takes about `47s`
+  - `--busy-loop-stop` did not terminate quickly in one probe and was cut off at `30s` / about `70.9M` instructions
+- Recommended defaults:
+  - `timeout 30` for short runs and busy-loop probes
+  - `timeout 120` for longer bounded runs up to `120000000` instructions
+
+```bash
+cd cubeblack
+
+# Short feedback run
+/usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
+  timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+
+# Longer stability run
+/usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
+  timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000
+
+# Busy-loop probe
+/usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
+  timeout 30 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop
+```
+
 ## Boot-debug workflow
 
 1. Reproduce with `--max-instructions` and record logs.
