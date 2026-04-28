@@ -22,6 +22,16 @@ Use this skill to make reproducible progress on booting and running unmodified A
 
 Run from repository root unless noted.
 
+CubeBlack firmware source of truth for emulator runs:
+- The emulator reads the ROM image configured in `cubeblack/config.yaml`, currently `cubeblack/arducopter.bin`.
+- Rebuilding `modules/ardupilot/build/CubeBlack/bin/arducopter.bin` is not enough by itself; copy the rebuilt binary into `cubeblack/` before debugging.
+- Refresh and verify with:
+
+```bash
+cp modules/ardupilot/build/CubeBlack/bin/arducopter.bin cubeblack/arducopter.bin
+sha256sum cubeblack/arducopter.bin modules/ardupilot/build/CubeBlack/bin/arducopter.bin
+```
+
 1. Install dependencies and build once:
 
 ```bash
@@ -69,12 +79,16 @@ Key paths for USB/peripheral debugging:
 ```bash
 cd modules/ardupilot
 # Ensure prerequisites are met (see Tools/*prereq* scripts)
+./waf configure --board=CubeBlack --debug --bootloader
+./waf bootloader
 ./waf configure --board=CubeBlack --debug
-./waf copter
-ls build/CubeBlack/bin/*
-cp build/CubeBlack/bin/* ../../cubeblack/
+./waf copter -j12
+cp build/CubeBlack/bin/arducopter.bin ../../cubeblack/arducopter.bin
+sha256sum ../../cubeblack/arducopter.bin build/CubeBlack/bin/arducopter.bin
 cd ../..
 ```
+
+If you need to update the bootloader image used by the emulator as well, copy `build/CubeBlack/bin/CubeBlack_bl.bin` to `cubeblack/CubeBlack_bl.bin` explicitly.
 
 ## Standard Debug Workflow
 
@@ -91,6 +105,13 @@ cd ../..
 4. Apply one targeted fix.
 5. Re-run short then long test.
 6. Compare warning classes and progression.
+
+## Continuation Rule
+
+- After a fix improves boot and reveals a new concrete blocker, continue directly to that blocker.
+- Do not treat "I fixed one thing and now I can see the next thing" as a natural stopping point.
+- If the operator says `continue`, interpret that as immediate authorization to keep working on the next concrete debugging step.
+- Only hand off after documenting the state in `FEATURE_GAP.md` when further progress is blocked by something external or the operator explicitly wants a pause.
 
 ## Common CubeBlack Blockers
 
@@ -169,3 +190,5 @@ A fix is demonstrably good when:
 1. Targeted warning/error class is removed or reduced.
 2. Emulator executes stably for a materially longer window.
 3. The change is traceable to STM32F4 documented behavior or required board memory map.
+
+This confirms progress. It does not by itself end the overall boot task when the next blocker is already visible and actionable.

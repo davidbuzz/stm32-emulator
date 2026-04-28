@@ -20,6 +20,16 @@ Get the CubeBlack target to boot and run ArduPilot firmware with no firmware-sid
 
 ## Run commands
 
+CubeBlack firmware source of truth for emulator runs:
+- The emulator loads the image referenced by [cubeblack/config.yaml](cubeblack/config.yaml), which currently points at [cubeblack/arducopter.bin](cubeblack/arducopter.bin).
+- A rebuild under [modules/ardupilot/build/CubeBlack/bin/](modules/ardupilot/build/CubeBlack/bin/) does not affect emulator runs until you copy the rebuilt file into [cubeblack/](cubeblack/).
+- Refresh command:
+
+```bash
+cp modules/ardupilot/build/CubeBlack/bin/arducopter.bin cubeblack/arducopter.bin
+sha256sum cubeblack/arducopter.bin modules/ardupilot/build/CubeBlack/bin/arducopter.bin
+```
+
 ```bash
 # Setup Ubuntu dev environment
 ./DEV_SETUP_UBUNTU.sh
@@ -40,6 +50,14 @@ cd cubeblack
 4. Re-run and compare logs against baseline.
 5. Keep changes minimal and board-targeted when possible.
 
+## Continuation Rule
+
+- Do not end the work merely because one blocker was fixed and a new blocker became visible.
+- "One blocker fixed, next blocker identified" means continue working.
+- If the operator sends `continue`, resume the next concrete step immediately; do not treat it as a prompt to summarize and stop.
+- Only stop when the operator asks to stop, or when the next step is blocked by something external that cannot be resolved inside the repo.
+- `FEATURE_GAP.md` is the backlog and handover document when a handoff is required; it is not a stop signal by itself.
+
 ## Reference docs
 
 - [cubeblack/STM32F4xx_Reference_Manual.md](cubeblack/STM32F4xx_Reference_Manual.md)
@@ -56,11 +74,16 @@ Full ArduPilot source is available as a git submodule at [modules/ardupilot/](mo
 
 ```bash
 cd modules/ardupilot
+./waf configure --board=CubeBlack --debug --bootloader
+./waf bootloader
 ./waf configure --board=CubeBlack --debug
-./waf copter
-cp build/CubeBlack/bin/* ../../cubeblack/
+./waf copter -j12
+cp build/CubeBlack/bin/arducopter.bin ../../cubeblack/arducopter.bin
+sha256sum ../../cubeblack/arducopter.bin build/CubeBlack/bin/arducopter.bin
 cd ../..
 ```
+
+If the emulator bootloader image also needs to change, copy `build/CubeBlack/bin/CubeBlack_bl.bin` to `cubeblack/CubeBlack_bl.bin` explicitly.
 
 ## Implementation guidance
 
@@ -88,7 +111,7 @@ Run a short bounded test for fast feedback, then a longer stability test to conf
 ## Todo list requirements
 
 When maintaining a TODO list, always end it with:
-- `git commit your changes`
+  - `git commit your changes, assess all un-comitted changes, not just your recent edits`
 - `refer to FEATURE_GAP.md afterwards to get more work to do`
 
 ## Done criteria for boot tasks
@@ -97,6 +120,7 @@ A boot-progress fix is considered good when:
 - the targeted warning/error class is removed or reduced,
 - execution advances stably for a materially longer run window,
 - and the change is traceable to documented STM32F4 behavior or board config requirements.
+- Reaching this state does not end the task if a next blocker is already observable and actionable.
 
 ## Concrete success marker
 

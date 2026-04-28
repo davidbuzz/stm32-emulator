@@ -23,6 +23,14 @@ Repository guidance for AI coding agents working in this project.
 
 ## Known working run commands
 
+- CubeBlack firmware source of truth for emulator runs:
+  - The emulator loads the ROM image named in `cubeblack/config.yaml`, currently `cubeblack/arducopter.bin`.
+  - Rebuilding under `modules/ardupilot/build/CubeBlack/bin/` does not change the emulator input until you copy the rebuilt image into `cubeblack/`.
+  - Refresh command:
+    - `cp modules/ardupilot/build/CubeBlack/bin/arducopter.bin cubeblack/arducopter.bin`
+  - Optional verification:
+    - `sha256sum cubeblack/arducopter.bin modules/ardupilot/build/CubeBlack/bin/arducopter.bin`
+
 - Setup Ubuntu dev environment:
   - ./DEV_SETUP_UBUNTU.sh
 - Run CubeBlack directly:
@@ -42,6 +50,14 @@ Repository guidance for AI coding agents working in this project.
 3. Fix one blocker at a time.
 4. Re-run and compare logs against baseline.
 5. Keep changes minimal and board-targeted when possible.
+
+## Continuation rule
+
+- Do not stop after fixing one blocker if boot/runtime progress simply exposes the next actionable blocker.
+- Treat "fixed one blocker, found the next blocker" as an in-progress state, not a completion state.
+- Continue immediately into the next highest-confidence blocker unless a hard external blocker appears or the operator explicitly asks to pause.
+- If the operator says `continue`, treat that as an explicit instruction to resume work immediately rather than a conversational checkpoint.
+- Use `FEATURE_GAP.md` as a handover document only when ending is actually necessary, not as a reason to stop early.
 
 ## STM32F4 reference docs in this repo
 
@@ -65,12 +81,16 @@ Use this for cross-referencing firmware behavior, ISR logic, USB driver internal
 ```bash
 cd modules/ardupilot
 # Ensure prerequisites are met (see Tools/*prereq* scripts)
+./waf configure --board=CubeBlack --debug --bootloader
+./waf bootloader
 ./waf configure --board=CubeBlack --debug
-./waf copter
-ls build/CubeBlack/bin/*
-cp build/CubeBlack/bin/* ../../cubeblack/
+./waf copter -j12
+cp build/CubeBlack/bin/arducopter.bin ../../cubeblack/arducopter.bin
+sha256sum ../../cubeblack/arducopter.bin build/CubeBlack/bin/arducopter.bin
 cd ../..
 ```
+
+If you also intend to refresh the bootloader image used by the emulator, copy `build/CubeBlack/bin/CubeBlack_bl.bin` to `cubeblack/CubeBlack_bl.bin` separately.
 
 ## Emulator implementation guidance
 
@@ -107,7 +127,7 @@ cd ../..
 ## Todo list requirements
 
 - When maintaining a TODO list for work in this repo, always end it with these final items in this order:
-  - `git commit your changes`
+  - `git commit your changes, assess all un-comitted changes, not just your recent edits`
   - `refer to FEATURE_GAP.md afterwards to get more work to do`
 - After completing the current task, use `FEATURE_GAP.md` as the default source for identifying the next useful piece of work.
 
@@ -118,6 +138,7 @@ A boot-progress fix is considered demonstrably good when:
 - the targeted warning/error class is removed or reduced,
 - execution advances stably for a materially longer run window,
 - and the change is traceable to documented STM32F4 behavior or board config requirements.
+- This is evidence of progress, not permission to stop if another concrete blocker is now visible and actionable.
 
 ## Concrete success marker
 

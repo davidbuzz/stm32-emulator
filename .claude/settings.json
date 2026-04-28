@@ -3,7 +3,14 @@
     "allow": [
       "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 100000000)",
       "Bash(git commit -m ' *)",
-      "Bash(../target/release/stm32-emulator config.yaml --console-only --max-instructions 15000000)"
+      "Bash(../target/release/stm32-emulator config.yaml --console-only --max-instructions 15000000)",
+      "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 3000000)",
+      "Bash(../target/release/stm32-emulator config.yaml --console-only --max-instructions 10000000)",
+      "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 20000000)",
+      "Bash(../target/release/stm32-emulator config.yaml -v --busy-loop-stop)",
+      "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 30000000)",
+      "Bash(*)",
+      "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 50000000)"
     ]
   }
 }
