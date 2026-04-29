@@ -105,7 +105,7 @@ Work this list top-to-bottom; defer lower tiers until higher tiers are demonstra
 
 ### DMA and Peripheral-DMA Coupling
 
-- [ ] HIGH PRIORITY: Enforce STM32F427 stream/channel request mapping from `STM32F4_DMA.md` Table 1 and Table 2 instead of merely storing `CHSEL`.
+- [x] HIGH PRIORITY: Enforce STM32F427 stream/channel request mapping from `STM32F4_DMA.md` Table 1 and Table 2 instead of merely storing `CHSEL`. Current enforcement blocks mismatched stream/channel configurations for key active peripherals (ADC1/2/3, SPI1/2/3, USART/UART, I2C1/2/3, SDIO) while leaving unknown requests permissive.
 - [x] Peripheral-driven DMA requests: deferred USART RX now calls `do_xfer` when idle window expires, moving real ext_device bytes into the DMA buffer; SPI full-duplex DMA already handled via read_dma/write_dma.
 - [x] Per-beat NDTR tracking: `initial_ndtr` saved on NDTR write; NDTR set to 0 on non-circular completion; reloaded on circular completion.
 - [x] Distinct PSIZE/MSIZE: `do_xfer` now uses `psize()` (bits [12:11]) for peripheral transfers and `msize()` (bits [14:13]) for memory transfers.

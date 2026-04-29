@@ -79,7 +79,7 @@ impl Peripheral for Dma {
     fn step(&mut self, sys: &System) {
         let name = self.name.clone();
         for i in 0..8 {
-            if self.streams[i].step_deferred(&name, sys) {
+            if self.streams[i].step_deferred(&name, i, sys) {
                 self.signal_tc(sys, i);
             }
         }
@@ -104,7 +104,7 @@ impl Peripheral for Dma {
             }
             Access::Reg(_) => {}
             Access::StreamReg(i, offset) => {
-                if self.streams[i].write(&self.name, sys, offset, value) {
+                if self.streams[i].write(&self.name, i, sys, offset, value) {
                     self.signal_tc(sys, i);
                 }
             }
@@ -202,7 +202,7 @@ impl Stream {
     /// For M2P (Write): NDTR beats, reading msize bytes from memory (MINC), writing psize
     ///   bytes to peripheral (PINC).
     /// For MemCopy: source and destination both increment by msize per beat.
-    fn do_xfer(&self, name: &str, sys: &System) {
+    fn do_xfer(&self, dma_name: &str, stream_idx: usize, sys: &System) {
         let dir = self.dir();
         let mem_addr = self.data_addr();
         let peri_addr = self.par;
@@ -215,11 +215,24 @@ impl Stream {
         if ndtr == 0 { return; }
 
         let peri = Peripherals::get_peripheral(&sys.p.peripherals, peri_addr);
+        let peri_desc = sys.p.addr_desc(peri_addr);
+        let peri_name = peripheral_name_from_desc(&peri_desc);
+
+        if !request_mapping_allows(dma_name, stream_idx as u8, self.channel(), peri_name, dir) {
+            warn!(
+                "{} stream={} channel={} blocked request mapping for {} dir={:?}",
+                dma_name,
+                stream_idx,
+                self.channel(),
+                peri_desc,
+                dir
+            );
+            return;
+        }
 
         if log::log_enabled!(log::Level::Debug) {
-            let peri_desc = sys.p.addr_desc(peri_addr);
             debug!("{} xfer channel={} peri_{} dir={:?} mem=0x{:08x} ndtr={} psize={} msize={} circ={} minc={} pinc={}",
-                name, self.channel(), peri_desc, dir, mem_addr, ndtr,
+                dma_name, self.channel(), peri_desc, dir, mem_addr, ndtr,
                 psize, msize, self.is_circular(), minc, pinc);
         }
 
@@ -259,7 +272,7 @@ impl Stream {
                     })
                 };
 
-                trace!("{} xfer P2M buf_len={}", name, buf.len());
+                trace!("{} xfer P2M buf_len={}", dma_name, buf.len());
 
                 if minc {
                     // Write sequentially to memory
@@ -302,7 +315,7 @@ impl Stream {
                     v
                 });
 
-                trace!("{} xfer M2P buf_len={}", name, buf.len());
+                trace!("{} xfer M2P buf_len={}", dma_name, buf.len());
 
                 if pinc {
                     // Peripheral address increments: write psize bytes per beat
@@ -367,7 +380,7 @@ impl Stream {
         }
     }
 
-    pub fn write(&mut self, name: &str, sys: &System, offset: u32, mut value: u32) -> bool {
+    pub fn write(&mut self, dma_name: &str, stream_idx: usize, sys: &System, offset: u32, mut value: u32) -> bool {
         match offset {
             0x0000 => {
                 self.cr = value;
@@ -380,7 +393,7 @@ impl Stream {
                         return false;
                     }
 
-                    self.do_xfer(name, sys);
+                    self.do_xfer(dma_name, stream_idx, sys);
 
                     if self.is_double_buffer() {
                         // DBM: toggle CT (bit 19) to switch between M0AR and M1AR, reload NDTR
@@ -416,7 +429,7 @@ impl Stream {
     }
 
     /// Called from Dma::step(). Returns true if a transfer completed and TC should be signaled.
-    fn step_deferred(&mut self, name: &str, sys: &System) -> bool {
+    fn step_deferred(&mut self, dma_name: &str, stream_idx: usize, sys: &System) -> bool {
         if !self.deferred_usart_rx || self.cr & 1 == 0 {
             return false;
         }
@@ -428,7 +441,7 @@ impl Stream {
 
         // Idle window expired: perform the transfer (reads available bytes from USART ext_device)
         // then decide based on circular mode whether to reload or finish.
-        self.do_xfer(name, sys);
+        self.do_xfer(dma_name, stream_idx, sys);
         self.deferred_usart_rx = false;
 
         if self.is_double_buffer() {
@@ -454,7 +467,67 @@ fn is_usart_dr_request(peri_desc: &str) -> bool {
     (peri_desc.contains("peri=USART") || peri_desc.contains("peri=UART")) && peri_desc.contains("reg=DR")
 }
 
-#[derive(Debug, PartialEq, Eq)]
+fn peripheral_name_from_desc(desc: &str) -> Option<&str> {
+    let (_, tail) = desc.split_once("peri=")?;
+    Some(tail.split_whitespace().next().unwrap_or_default())
+}
+
+fn request_mapping_allows(
+    dma_name: &str,
+    stream: u8,
+    channel: u8,
+    peri_name: Option<&str>,
+    dir: Dir,
+) -> bool {
+    let Some(peri_name) = peri_name else {
+        return true;
+    };
+
+    let req = match (peri_name, dir) {
+        ("ADC1", Dir::Read) => Some(&[("DMA2", 0u8, 0u8), ("DMA2", 4, 0)][..]),
+        ("ADC2", Dir::Read) => Some(&[("DMA2", 2u8, 1u8), ("DMA2", 3, 1)][..]),
+        ("ADC3", Dir::Read) => Some(&[("DMA2", 0u8, 2u8), ("DMA2", 1, 2)][..]),
+
+        ("SPI1", Dir::Read) => Some(&[("DMA2", 0u8, 3u8), ("DMA2", 2, 3)][..]),
+        ("SPI1", Dir::Write) => Some(&[("DMA2", 3u8, 3u8), ("DMA2", 5, 3)][..]),
+        ("SPI2", Dir::Read) => Some(&[("DMA1", 3u8, 0u8)][..]),
+        ("SPI2", Dir::Write) => Some(&[("DMA1", 4u8, 0u8)][..]),
+        ("SPI3", Dir::Read) => Some(&[("DMA1", 0u8, 0u8), ("DMA1", 2, 0)][..]),
+        ("SPI3", Dir::Write) => Some(&[("DMA1", 5u8, 0u8), ("DMA1", 7, 0)][..]),
+
+        ("USART1", Dir::Read) => Some(&[("DMA2", 2u8, 4u8), ("DMA2", 5, 4)][..]),
+        ("USART1", Dir::Write) => Some(&[("DMA2", 7u8, 4u8)][..]),
+        ("USART2", Dir::Read) => Some(&[("DMA1", 5u8, 4u8)][..]),
+        ("USART2", Dir::Write) => Some(&[("DMA1", 6u8, 4u8)][..]),
+        ("USART3", Dir::Read) => Some(&[("DMA1", 1u8, 4u8)][..]),
+        ("USART3", Dir::Write) => Some(&[("DMA1", 3u8, 4u8), ("DMA1", 4, 7)][..]),
+        ("UART4", Dir::Read) => Some(&[("DMA1", 2u8, 4u8)][..]),
+        ("UART4", Dir::Write) => Some(&[("DMA1", 4u8, 4u8)][..]),
+        ("UART5", Dir::Read) => Some(&[("DMA1", 0u8, 4u8)][..]),
+        ("UART5", Dir::Write) => Some(&[("DMA1", 7u8, 4u8)][..]),
+        ("USART6", Dir::Read) => Some(&[("DMA2", 1u8, 5u8), ("DMA2", 2, 5)][..]),
+        ("USART6", Dir::Write) => Some(&[("DMA2", 6u8, 5u8), ("DMA2", 7, 5)][..]),
+
+        ("I2C1", Dir::Read) => Some(&[("DMA1", 0u8, 1u8), ("DMA1", 5, 1)][..]),
+        ("I2C1", Dir::Write) => Some(&[("DMA1", 6u8, 1u8), ("DMA1", 7, 1)][..]),
+        ("I2C2", Dir::Read) => Some(&[("DMA1", 2u8, 7u8), ("DMA1", 3, 7)][..]),
+        ("I2C2", Dir::Write) => Some(&[("DMA1", 7u8, 7u8)][..]),
+        ("I2C3", Dir::Read) => Some(&[("DMA1", 2u8, 3u8)][..]),
+        ("I2C3", Dir::Write) => Some(&[("DMA1", 4u8, 3u8)][..]),
+
+        // SDIO can be used in both directions through the same request entries.
+        ("SDIO", _) => Some(&[("DMA2", 3u8, 4u8), ("DMA2", 6, 4)][..]),
+
+        // Keep unsupported peripheral request IDs permissive for now.
+        _ => None,
+    };
+
+    req.map(|entries| {
+        entries.iter().any(|(dma, s, ch)| dma_name == *dma && stream == *s && channel == *ch)
+    }).unwrap_or(true)
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Dir {
     Read,
     Write,
