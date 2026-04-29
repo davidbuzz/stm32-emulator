@@ -35,6 +35,8 @@ pub(crate) static CONTINUE_EXECUTION: AtomicBool = AtomicBool::new(false);
 static BUSY_LOOP_REACHED: AtomicBool = AtomicBool::new(false);
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+const BUSY_LOOP_STREAK_THRESHOLD: u32 = 1_000_000;
+
 fn disassemble_instruction(diassembler: &Capstone, uc: &Unicorn<()>, pc: u64) -> String {
     let mut instr = [0; 4];
     if uc.mem_read(pc, &mut instr).is_err() {
@@ -119,6 +121,8 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
     {
         let trace_instructions = crate::verbose() >= 4;
         let busy_loop_stop = args.busy_loop_stop;
+        let mut busy_loop_pc: Option<u32> = None;
+        let mut busy_loop_streak: u32 = 0;
         let p = sys.p.clone();
         let d = sys.d.clone();
         let interrupt_period = args.interrupt_period;
@@ -136,7 +140,17 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                 }
             }
             unsafe {
-                if busy_loop_stop && LAST_INSTRUCTION.0 == pc as u32 {
+                if busy_loop_stop {
+                    let current_pc = pc as u32;
+                    if busy_loop_pc == Some(current_pc) {
+                        busy_loop_streak = busy_loop_streak.saturating_add(1);
+                    } else {
+                        busy_loop_pc = Some(current_pc);
+                        busy_loop_streak = 1;
+                    }
+                }
+
+                if busy_loop_stop && busy_loop_streak >= BUSY_LOOP_STREAK_THRESHOLD {
                     let sp = uc.reg_read(RegisterARM::SP).unwrap_or(0);
                     let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
                     let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
@@ -151,8 +165,8 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     let basepri = uc.reg_read(RegisterARM::BASEPRI).unwrap_or(0);
                     let control = uc.reg_read(RegisterARM::CONTROL).unwrap_or(0);
                     let ipsr = uc.reg_read(RegisterARM::IPSR).unwrap_or(0);
-                    info!("Busy loop reached pc=0x{:08x} sp=0x{:08x} lr=0x{:08x} r0=0x{:08x} r1=0x{:08x} r2=0x{:08x} r3=0x{:08x} r4=0x{:08x} r5=0x{:08x} r6=0x{:08x} r7=0x{:08x} primask=0x{:08x} basepri=0x{:08x} control=0x{:08x} ipsr=0x{:08x}",
-                        pc, sp, lr, r0, r1, r2, r3, r4, r5, r6, r7, primask, basepri, control, ipsr);
+                    info!("Busy loop reached pc=0x{:08x} streak={} sp=0x{:08x} lr=0x{:08x} r0=0x{:08x} r1=0x{:08x} r2=0x{:08x} r3=0x{:08x} r4=0x{:08x} r5=0x{:08x} r6=0x{:08x} r7=0x{:08x} primask=0x{:08x} basepri=0x{:08x} control=0x{:08x} ipsr=0x{:08x}",
+                        pc, busy_loop_streak, sp, lr, r0, r1, r2, r3, r4, r5, r6, r7, primask, basepri, control, ipsr);
                     if r1 != 0 {
                         let mut buf = [0u8; 64];
                         if uc.mem_read(r1, &mut buf).is_ok() {
