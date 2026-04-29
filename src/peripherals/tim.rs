@@ -14,7 +14,7 @@
 
 use crate::{emulator::NUM_INSTRUCTIONS, system::System};
 
-use super::Peripheral;
+use super::{Peripheral, meta::DeviceMeta};
 
 #[derive(Default)]
 pub struct Tim {
@@ -34,16 +34,21 @@ pub struct Tim {
     ccr2: u32,
     ccr3: u32,
     ccr4: u32,
+    update_irq: Option<i32>,
+    cc_irq: Option<i32>,
     last_clk: u64,
     psc_accum: u64,
 }
 
 impl Tim {
-    pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
+    pub fn new(name: &str, meta: &DeviceMeta) -> Option<Box<dyn Peripheral>> {
         if name.starts_with("TIM") {
+            let (update_irq, cc_irq) = Self::resolve_irqs(name, meta);
             Some(Box::new(Self {
                 name: name.to_string(),
                 arr: u32::MAX,
+                update_irq,
+                cc_irq,
                 ..Self::default()
             }))
         } else {
@@ -51,39 +56,40 @@ impl Tim {
         }
     }
 
-    /// Return the primary (update) IRQ number for this timer.
-    /// Advanced timers (TIM1/TIM8) have 4 separate IRQs; we use the update IRQ.
-    fn irq_number(&self) -> Option<i32> {
-        match self.name.as_str() {
-            // Advanced timers – update IRQ
-            "TIM1" => Some(25),
-            "TIM8" => Some(44),
-            // General-purpose 32-bit / 16-bit
-            "TIM2"  => Some(28),
-            "TIM3"  => Some(29),
-            "TIM4"  => Some(30),
-            "TIM5"  => Some(50),
-            // Basic timers
-            "TIM6"  => Some(54),
-            "TIM7"  => Some(55),
-            // APB2 advanced-control family
-            "TIM9"  => Some(24),
-            "TIM10" => Some(25),
-            "TIM11" => Some(26),
-            "TIM12" => Some(43),
-            "TIM13" => Some(44),
-            "TIM14" => Some(45),
+    fn resolve_irqs(name: &str, meta: &DeviceMeta) -> (Option<i32>, Option<i32>) {
+        let update = match name {
+            "TIM1" => meta.irq_of("TIM1_UP_TIM10").or(Some(25)),
+            "TIM2" => meta.irq_of("TIM2").or(Some(28)),
+            "TIM3" => meta.irq_of("TIM3").or(Some(29)),
+            "TIM4" => meta.irq_of("TIM4").or(Some(30)),
+            "TIM5" => meta.irq_of("TIM5").or(Some(50)),
+            "TIM6" => meta.irq_of("TIM6_DAC").or(Some(54)),
+            "TIM7" => meta.irq_of("TIM7").or(Some(55)),
+            "TIM8" => meta.irq_of("TIM8_UP_TIM13").or(Some(44)),
+            "TIM9" => meta.irq_of("TIM1_BRK_TIM9").or(Some(24)),
+            "TIM10" => meta.irq_of("TIM1_UP_TIM10").or(Some(25)),
+            "TIM11" => meta.irq_of("TIM1_TRG_COM_TIM11").or(Some(26)),
+            "TIM12" => meta.irq_of("TIM8_BRK_TIM12").or(Some(43)),
+            "TIM13" => meta.irq_of("TIM8_UP_TIM13").or(Some(44)),
+            "TIM14" => meta.irq_of("TIM8_TRG_COM_TIM14").or(Some(45)),
             _ => None,
-        }
+        };
+
+        let cc = match name {
+            "TIM1" => meta.irq_of("TIM1_CC").or(Some(27)),
+            "TIM8" => meta.irq_of("TIM8_CC").or(Some(46)),
+            _ => None,
+        };
+
+        (update, cc)
     }
 
-    /// Return an additional capture/compare IRQ if the timer has a dedicated CC irq.
+    fn irq_number(&self) -> Option<i32> {
+        self.update_irq
+    }
+
     fn cc_irq_number(&self) -> Option<i32> {
-        match self.name.as_str() {
-            "TIM1" => Some(27),
-            "TIM8" => Some(46),
-            _ => None,
-        }
+        self.cc_irq
     }
 
     fn tick(&mut self, sys: &System) {

@@ -29,6 +29,11 @@ pub mod sdio;
 pub mod tim;
 pub mod exti;
 pub mod meta;
+pub mod crc;
+pub mod rng;
+pub mod iwdg;
+pub mod rtc;
+pub mod can;
 
 use adc::*;
 use rcc::*;
@@ -51,6 +56,11 @@ use sw_spi::*;
 use tim::*;
 use exti::*;
 use meta::DeviceMeta;
+use crc::*;
+use rng::*;
+use iwdg::*;
+use rtc::*;
+use can::*;
 
 use std::{collections::{BTreeMap, VecDeque, HashMap}, cell::RefCell};
 use svd_parser::svd::{RegisterInfo, Device as SvdDevice};
@@ -113,11 +123,16 @@ impl Peripherals {
             .or_else(||         I2c::new(&name, meta))
             .or_else(||         Dma::new(&name))
             .or_else(||       OtgFs::new(&name))
-            .or_else(||         Tim::new(&name))
+            .or_else(||         Tim::new(&name, meta))
             .or_else(||        Exti::new(&name))
             .or_else(||         Spi::new(&name, ext_devices))
             .or_else(||        Sdio::new(&name))
             .or_else(||         Adc::new(&name))
+            .or_else(||         Crc::new(&name))
+            .or_else(||         Rng::new(&name))
+            .or_else(||         Iwdg::new(&name))
+            .or_else(||         Rtc::new(&name))
+            .or_else(||         Can::new(&name))
         ;
 
         if let Some(p) = p {
@@ -206,14 +221,20 @@ impl Peripherals {
 
     fn bitbanding(addr: u32) -> Option<(u32, u8)> {
         if (0x4200_0000..0x4400_0000).contains(&addr) {
-            //let old_addr = addr;
+            // Peripheral alias region -> 0x4000_0000..0x400F_FFFF
             let bit_number = (addr % 32) / 4;
-            let addr = 0x4000_0000 + (addr - 0x4200_0000)/32;
-            //trace!("bitbanding: 0x{:08x} -> addr=0x{:08x} bit={}", old_addr, addr, bit_number);
+            let addr = 0x4000_0000 + (addr - 0x4200_0000) / 32;
             return Some((addr, bit_number as u8));
-        } else {
-            None
         }
+
+        if (0x2200_0000..0x2400_0000).contains(&addr) {
+            // SRAM alias region -> 0x2000_0000..0x200F_FFFF
+            let bit_number = (addr % 32) / 4;
+            let addr = 0x2000_0000 + (addr - 0x2200_0000) / 32;
+            return Some((addr, bit_number as u8));
+        }
+
+        None
     }
 
     fn is_register(addr: u32) -> bool {
@@ -263,7 +284,7 @@ impl Peripherals {
     pub fn write(&self, sys: &System, addr: u32, size: u8, mut value: u32) {
         if let Some((addr, bit_number)) = Self::bitbanding(addr) {
             let mut v = self.read(sys, addr, 1);
-            v &= 1 << bit_number;
+            v &= !(1 << bit_number);
             v |= (value & 1) << bit_number;
             return self.write(sys, addr, 1, v);
         }

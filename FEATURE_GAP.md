@@ -162,7 +162,7 @@ Work this list top-to-bottom; defer lower tiers until higher tiers are demonstra
 
 ## Reference Codebase Reuse Catalog
 
-Survey performed April 2026 covering Renode (modules/renode), AZhurGIT fork (modules/fork-AZhurGIT), and goran-mahovlic fork (modules/fork-goran-mahovlic). See RENODE_COMPARISON.md for the full architectural comparison. This section records which concrete reference files are most reusable when implementing each gap item below.
+Survey performed April 2026 covering Renode (modules/renode), AZhurGIT fork (modules/fork-AZhurGIT), and goran-mahovlic fork (modules/fork-goran-mahovlic). This section records which concrete reference files are most reusable when implementing each gap item below.
 
 | Gap | Best reference | Path | Notes |
 |---|---|---|---|
@@ -188,6 +188,27 @@ Survey performed April 2026 covering Renode (modules/renode), AZhurGIT fork (mod
 - [ ] LOW: Flash status register (BSY, EOP, OPERR, WRPERR, PGAERR flags). Firmware that polls BSY after erase/program will spin forever without it. Reference: Renode `STM32F4_FlashController.cs` lines 105–126.
 - [ ] LOW: FMC/FSMC 4-bank abstraction with external device routing. Current `fsmc.rs` is a stub; the goran-mahovlic fork has a complete `Bank` struct with `ext_device` connector. Reference: `modules/fork-goran-mahovlic/src/peripherals/fmc.rs`.
 - [ ] MEDIUM: AZhurGIT `meta.rs` SVD-driven register-offset and IRQ-number lookup. Eliminates hardcoded offsets and supports F1/F4 variants from one codebase. Port overhead is moderate; benefit is long-term maintainability, not immediate boot progress.
+
+### Renode comparison migration status
+
+This file is now the canonical backlog. Content from the former Renode comparison write-up has been migrated here so the old comparison file can be retired.
+
+Items from that comparison that are still not fully implemented:
+
+- [ ] HIGH: USB OTG FS remains partial; endpoint/FIFO/interrupt behavior is still incomplete for full CDC-accurate modeling.
+- [ ] MEDIUM: `meta.rs` adoption is still partial; IRQ lookup is now used by both I2C and TIM, but broader register-offset migration is pending.
+- [ ] MEDIUM: Missing STM32F4 peripheral coverage compared to Renode still includes Ethernet MAC.
+- [ ] LOW: LTDC/video support remains unimplemented (not currently required for CubeBlack runtime milestones).
+
+Items from that comparison that are now implemented or materially addressed:
+
+- [x] TIM model is present and covers TIM1-TIM14 with update/CC event handling.
+- [x] EXTI peripheral model is implemented and wired.
+- [x] FLASH control/register behavior is implemented beyond simple ACR stubs.
+- [x] DMA now performs real memory movement (`mem_read`/`mem_write`) instead of register-only completion.
+- [x] PWR and ADC peripheral models are present.
+- [x] Bit-band alias support now includes both peripheral alias mapping and SRAM alias mapping.
+- [x] Missing-peripheral gap items CAN, RTC, IWDG, RNG, and CRC now have peripheral stubs wired in the main registry.
 
 ---
 

@@ -4,7 +4,7 @@
 // Builds DeviceMeta from the parsed SVD at startup so individual peripheral models
 // can look up IRQ numbers by name instead of hardcoding chip-specific values.
 // Ported and simplified from AZhurGIT fork (modules/fork-AZhurGIT/src/peripherals/meta.rs).
-// See RENODE_COMPARISON.md §7 for motivation and FEATURE_GAP.md for status.
+// See FEATURE_GAP.md for migration status and backlog tracking.
 
 use std::collections::HashMap;
 use svd_parser::svd::Device as SvdDevice;

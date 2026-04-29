@@ -129,6 +129,7 @@ struct OtgFsState {
     ep0_rx_state: Ep0RxState,
     ep0_pending_setup: [u32; 2],
     ep0_fifo_read_count: u8,
+    ep0_setup_inflight: bool,
     ep0_in_transfer_pending: bool,
     ep_in_transfer_pending: [bool; EP_COUNT], // for EP1..3 (CDC bulk/interrupt)
     ep_txfe_was_fired: [bool; EP_COUNT],      // tracks whether TXFE fired for each pending EP transfer
@@ -457,7 +458,11 @@ impl OtgFsState {
                     self.pending_reset_clear = true;
                 }
             }
-            0x0014 => self.gintsts &= !value,
+            0x0014 => {
+                // GINTSTS is mostly W1C, but RXFLVL reflects RxFIFO non-empty state and
+                // should not be directly cleared by firmware writes.
+                self.gintsts &= !(value & !GINTSTS_RXFLVL);
+            }
             0x0018 => self.gintmsk = value,
             0x0024 => self.grxfsiz = value,
             0x0028 => self.dieptxf0 = value,
@@ -572,6 +577,7 @@ impl Peripheral for OtgFs {
                         shared.sof_delay = OTG_SOF_PERIOD;
                         shared.enum_stage = UsbEnumStage::DeliverSetAddress;
                         shared.ep0_rx_state = Ep0RxState::Idle;
+                        shared.ep0_setup_inflight = false;
                     }
                 }
             }
@@ -605,7 +611,11 @@ impl Peripheral for OtgFs {
             }
         }
 
-        if ep0_armed && shared.ep0_rx_state == Ep0RxState::Idle {
+        if ep0_armed
+            && shared.ep0_rx_state == Ep0RxState::Idle
+            && shared.doepint[0] & DOEPINT_STUP == 0
+            && !shared.ep0_setup_inflight
+        {
             let maybe_pkt = match shared.enum_stage {
                 UsbEnumStage::DeliverSetAddress => Some(SETUP_SET_ADDRESS),
                 UsbEnumStage::DeliverSetConfig => Some(SETUP_SET_CONFIG),
@@ -615,6 +625,7 @@ impl Peripheral for OtgFs {
                 info!("OTG_FS: delivering {} SETUP packet to EP0", if pkt == SETUP_SET_ADDRESS { "SetAddress" } else { "SetConfig" });
                 shared.ep0_pending_setup = pkt;
                 shared.ep0_rx_state = Ep0RxState::RxFlvlStatusPending;
+                shared.ep0_setup_inflight = true;
                 shared.gintsts |= GINTSTS_RXFLVL;
             }
         }
@@ -657,12 +668,16 @@ impl Peripheral for OtgFs {
                 UsbEnumStage::DeliverSetAddress => {
                     info!("OTG_FS: SetAddress ZLP done → DeliverSetConfig");
                     shared.enum_stage = UsbEnumStage::DeliverSetConfig;
+                    shared.ep0_setup_inflight = false;
                 }
                 UsbEnumStage::DeliverSetConfig  => {
                     info!("OTG_FS: SetConfig ZLP done → Configured");
                     shared.enum_stage = UsbEnumStage::Configured;
+                    shared.ep0_setup_inflight = false;
                 }
-                _ => {}
+                _ => {
+                    shared.ep0_setup_inflight = false;
+                }
             }
         }
 
@@ -699,7 +714,10 @@ impl Peripheral for OtgFs {
             // Already handled above (before RXFLVL re-assertion). Repeat here to also catch
             // the case where no RXFLVL is pending but other interrupt bits were just cleared.
             shared.irq_latched = false;
-        } else if !shared.irq_latched {
+        } else {
+            // Level-style raise: if OTG interrupt sources remain pending, keep asserting the
+            // NVIC pending bit each step. This avoids losing delivery windows around BASEPRI/
+            // exception return timing while remaining idempotent in NVIC.
             shared.maybe_raise_irq(sys);
             shared.irq_latched = true;
         }
