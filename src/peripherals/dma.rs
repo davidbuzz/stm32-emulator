@@ -3,9 +3,10 @@
 // STM32 name: DMA1 / DMA2 (direct memory access controller).
 // STM32F427 bases: DMA1=0x40026000, DMA2=0x40026400.
 // Key registers: LISR/HISR/LIFCR/HIFCR plus stream windows at 0x10 + n*0x18.
-// Key behavior: stream EN, NDTR countdown, PAR/MxAR addressing, TCIF status bits.
+// Key behavior: stream EN semantics, NDTR countdown, PAR/MxAR addressing, status bits.
 // Critical for this emulator: firmware uses DMA completion flags and IRQs for boot/runtime.
-// Current model: per-beat PINC/MINC, circular-mode NDTR reload, and TC/HT/TE/DME/FE class flags.
+// Current model: per-beat PINC/MINC, circular-mode NDTR reload, EN retrigger guard,
+// and TC/HT/TE/DME/FE class flags.
 // Still incomplete: FIFO thresholds/behavioral depth, double-buffer mode details, stream arbitration.
 // Datasheet/reference anchors: STM32F4 RM DMA chapter and cubeblack/STM32F4_DMA.md.
 
@@ -544,36 +545,47 @@ impl Stream {
     pub fn write(&mut self, dma_name: &str, stream_idx: usize, sys: &System, offset: u32, mut value: u32) -> StreamWriteResult {
         match offset {
             0x0000 => {
+                let was_enabled = self.cr & 1 != 0;
                 self.cr = value;
+
+                // EN set while already enabled should not retrigger a new transfer.
+                if (value & 1) != 0 && was_enabled {
+                    return StreamWriteResult::Noop;
+                }
+
+                // EN clear requests disable; keep it simple for now by canceling deferred RX window.
+                if (value & 1) == 0 {
+                    self.deferred_usart_rx = false;
+                    return StreamWriteResult::Noop;
+                }
+
                 self.deferred_usart_rx = false;
 
-                if value & 1 != 0 {
-                    if self.is_deferred_usart_rx(sys) {
-                        self.deferred_usart_rx = true;
-                        self.deferred_since = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
-                        return StreamWriteResult::Noop;
-                    }
-
-                    let ok = self.do_xfer(dma_name, stream_idx, sys);
-                    let half = self.ndtr > 1;
-
-                    if self.is_double_buffer() {
-                        // DBM: toggle CT (bit 19) to switch between M0AR and M1AR, reload NDTR
-                        self.cr ^= 1 << 19;
-                        self.ndtr = self.initial_ndtr;
-                    } else if self.is_circular() {
-                        // Circular without DBM: reload NDTR, keep same buffer
-                        self.ndtr = self.initial_ndtr;
-                    } else {
-                        value &= !1;
-                        self.ndtr = 0;
-                        self.next_cr = Some(value);
-                    }
-                    if ok {
-                        return StreamWriteResult::Completed { half };
-                    }
-                    return StreamWriteResult::TransferError;
+                if self.is_deferred_usart_rx(sys) {
+                    self.deferred_usart_rx = true;
+                    self.deferred_since = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+                    return StreamWriteResult::Noop;
                 }
+
+                let ok = self.do_xfer(dma_name, stream_idx, sys);
+                let half = self.ndtr > 1;
+
+                if self.is_double_buffer() {
+                    // DBM: toggle CT (bit 19) to switch between M0AR and M1AR, reload NDTR
+                    self.cr ^= 1 << 19;
+                    self.ndtr = self.initial_ndtr;
+                } else if self.is_circular() {
+                    // Circular without DBM: reload NDTR, keep same buffer
+                    self.ndtr = self.initial_ndtr;
+                } else {
+                    value &= !1;
+                    self.ndtr = 0;
+                    self.next_cr = Some(value);
+                }
+                if ok {
+                    return StreamWriteResult::Completed { half };
+                }
+                return StreamWriteResult::TransferError;
             }
             0x0004 => {
                 self.ndtr = value & 0xFFFF;

@@ -116,7 +116,7 @@ Work this list top-to-bottom; defer lower tiers until higher tiers are demonstra
 - [ ] HIGH PRIORITY: Implement DMA interrupt signaling into NVIC for all relevant classes (`TC`, `HT`, `TE`, `DME`, `FE`) plus matching status-bit visibility in `LISR/HISR`. All five class flags and IRQ-gated paths are now wired (`TC/HT/TE/DME/FE`), but trigger semantics for `DME/FE` are still simplified and need tighter RM-accurate conditions.
 - [ ] HIGH PRIORITY: Implement channel/request conflict handling and request arbitration when multiple enabled streams target the same peripheral request. Basic same-DMA conflict blocking is now in place for duplicate `(channel, PAR)` enables, but full arbitration policy is still unimplemented.
 - [ ] HIGH PRIORITY: Implement stream priority/arbitration semantics instead of treating all streams as immediate and conflict-free.
-- [ ] HIGH PRIORITY: Implement STM32F4-accurate disable/re-enable sequencing for `EN` clear/set behavior instead of treating enable as an immediate fire-and-forget trigger.
+- [ ] HIGH PRIORITY: Implement STM32F4-accurate disable/re-enable sequencing for `EN` clear/set behavior instead of treating enable as an immediate fire-and-forget trigger. Re-trigger on repeated `EN=1` writes is now blocked and `EN=0` disables deferred USART RX windows, but full RM-accurate enable/disable timing is still pending.
 
 ### USART/UART
 
