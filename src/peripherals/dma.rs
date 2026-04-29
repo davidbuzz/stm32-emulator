@@ -147,6 +147,17 @@ impl Dma {
         }
     }
 
+    fn signal_mode_error(&mut self, sys: &System, stream_idx: usize) {
+        // TE is the generic transfer-error class. DME/FE are mode-specific:
+        // direct mode uses DME, FIFO mode uses FE.
+        self.signal_te(sys, stream_idx);
+        if self.streams[stream_idx].fifo_enabled() {
+            self.signal_fe(sys, stream_idx);
+        } else {
+            self.signal_dme(sys, stream_idx);
+        }
+    }
+
     fn find_request_conflict(&self, stream_idx: usize, channel: u8, par: u32) -> Option<usize> {
         self.streams.iter().enumerate().find_map(|(idx, s)| {
             if idx != stream_idx
@@ -174,11 +185,7 @@ impl Peripheral for Dma {
                     self.signal_tc(sys, i);
                 }
                 StreamStepResult::TransferError => {
-                    self.signal_te(sys, i);
-                    self.signal_dme(sys, i);
-                    if self.streams[i].fifo_enabled() {
-                        self.signal_fe(sys, i);
-                    }
+                    self.signal_mode_error(sys, i);
                 }
                 StreamStepResult::Noop => {}
             }
@@ -225,11 +232,7 @@ impl Peripheral for Dma {
                                 owner_pl
                             );
                         } else {
-                            self.signal_te(sys, i);
-                            self.signal_dme(sys, i);
-                            if self.streams[i].fifo_enabled() {
-                                self.signal_fe(sys, i);
-                            }
+                            self.signal_mode_error(sys, i);
                             warn!(
                                 "{} stream={} blocked conflicting request channel={} par=0x{:08x} (pl {} <= {})",
                                 self.name,
@@ -252,11 +255,7 @@ impl Peripheral for Dma {
                         self.signal_tc(sys, i);
                     }
                     StreamWriteResult::TransferError => {
-                        self.signal_te(sys, i);
-                        self.signal_dme(sys, i);
-                        if self.streams[i].fifo_enabled() {
-                            self.signal_fe(sys, i);
-                        }
+                        self.signal_mode_error(sys, i);
                     }
                     StreamWriteResult::Noop => {}
                 }
@@ -357,20 +356,36 @@ impl Stream {
         }
     }
 
-    fn peri_data_size(&self) -> usize {
-        self.psize() * self.ndtr as usize
-    }
-
-    fn mem_data_size(&self) -> usize {
-        self.msize() * self.ndtr as usize
-    }
-
     fn data_addr(&self) -> u32 {
         if (self.cr >> 19) & 1 != 0 {
             self.m1ar
         } else {
             self.m0ar
         }
+    }
+
+    fn fifo_threshold_words(&self) -> usize {
+        // FTH (SxFCR bits [1:0]): 1/4, 1/2, 3/4, full of 4-word FIFO.
+        match self.fcr & 0b11 {
+            0b00 => 1,
+            0b01 => 2,
+            0b10 => 3,
+            0b11 => 4,
+            _ => 1,
+        }
+    }
+
+    fn transfer_beats_per_chunk(&self) -> usize {
+        if !self.fifo_enabled() {
+            // Direct mode: effectively one beat per request window.
+            return 1;
+        }
+
+        // FIFO mode: transfer one FIFO threshold worth of beats at a time.
+        // FIFO is 4 words = 16 bytes.
+        let fifo_bytes = self.fifo_threshold_words() * 4;
+        let beat_bytes = std::cmp::max(self.psize(), self.msize());
+        std::cmp::max(1, fifo_bytes / std::cmp::max(1, beat_bytes))
     }
 
     /// Perform one complete DMA transfer respecting PINC/MINC.
@@ -381,8 +396,8 @@ impl Stream {
     /// For MemCopy: source and destination both increment by msize per beat.
     fn do_xfer(&self, dma_name: &str, stream_idx: usize, sys: &System) -> bool {
         let dir = self.dir();
-        let mem_addr = self.data_addr();
-        let peri_addr = self.par;
+        let mut mem_addr = self.data_addr();
+        let mut peri_addr = self.par;
         let ndtr = self.ndtr as usize;
         let psize = self.psize();
         let msize = self.msize();
@@ -408,136 +423,143 @@ impl Stream {
         }
 
         let mut ok = true;
+        let chunk_beats = self.transfer_beats_per_chunk();
 
         if log::log_enabled!(log::Level::Debug) {
-            debug!("{} xfer channel={} peri_{} dir={:?} mem=0x{:08x} ndtr={} psize={} msize={} circ={} minc={} pinc={}",
+            debug!("{} xfer channel={} peri_{} dir={:?} mem=0x{:08x} ndtr={} psize={} msize={} circ={} minc={} pinc={} fifo={} fth_words={} chunk_beats={}",
                 dma_name, self.channel(), peri_desc, dir, mem_addr, ndtr,
-                psize, msize, self.is_circular(), minc, pinc);
+                psize, msize, self.is_circular(), minc, pinc, self.fifo_enabled(), self.fifo_threshold_words(), chunk_beats);
         }
 
-        match dir {
-            Dir::Read => {
-                // P2M: read from peripheral into memory
-                let peri_total = self.peri_data_size();
-                let mem_total = self.mem_data_size();
+        let mut remaining_beats = ndtr;
+        while remaining_beats > 0 {
+            let beats = std::cmp::min(remaining_beats, chunk_beats);
+            let peri_total = psize * beats;
+            let mem_total = msize * beats;
 
-                let mut buf = if pinc {
-                    // Peripheral address increments: read psize bytes per beat with address advance
-                    let mut v = std::collections::VecDeque::with_capacity(peri_total);
-                    for beat in 0..ndtr {
-                        let beat_offset = (peri_addr + (beat * psize) as u32) - peri_addr;
-                        if let Some(p) = peri {
-                            let mut slice = p.peripheral.borrow_mut().read_dma(sys, beat_offset, psize);
-                            v.extend(slice.drain(..));
-                        } else {
-                            v.extend(std::iter::repeat(0u8).take(psize));
+            match dir {
+                Dir::Read => {
+                    // P2M: read from peripheral into memory
+                    let mut buf = if pinc {
+                        let mut v = std::collections::VecDeque::with_capacity(peri_total);
+                        for beat in 0..beats {
+                            let beat_addr = peri_addr + (beat * psize) as u32;
+                            let beat_offset = beat_addr - peri_addr;
+                            if let Some(p) = peri {
+                                let mut slice = p.peripheral.borrow_mut().read_dma(sys, beat_offset, psize);
+                                v.extend(slice.drain(..));
+                            } else {
+                                v.extend(std::iter::repeat(0u8).take(psize));
+                            }
                         }
-                    }
-                    if let Some(p) = peri {
-                        p.peripheral.borrow_mut().set_dma_rx_dest(mem_addr);
-                    }
-                    v
-                } else {
-                    // Fixed peripheral address (normal case: DR register)
-                    let peri_offset = peri_addr - peri.map(|p| p.start).unwrap_or(peri_addr);
-                    let b = peri.map(|p| {
-                        p.peripheral.borrow_mut().set_dma_rx_dest(mem_addr);
-                        p.peripheral.borrow_mut().read_dma(sys, peri_offset, peri_total)
-                    });
-                    b.unwrap_or_else(|| {
-                        let mut v = std::collections::VecDeque::new();
-                        v.extend(std::iter::repeat(0u8).take(peri_total));
+                        if let Some(p) = peri {
+                            p.peripheral.borrow_mut().set_dma_rx_dest(mem_addr);
+                        }
                         v
-                    })
-                };
-
-                trace!("{} xfer P2M buf_len={}", dma_name, buf.len());
-
-                if minc {
-                    // Write sequentially to memory
-                        if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), buf.make_contiguous()) {
-                        warn!("DMA P2M write failed addr=0x{:08x} size={} e={}", mem_addr, mem_total, UniErr(e));
-                            ok = false;
-                    }
-                } else {
-                    // Fixed memory address: write last psize bytes repeatedly (or just write once for simplicity)
-                    let bytes = buf.make_contiguous();
-                    if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), &bytes[bytes.len().saturating_sub(msize)..]) {
-                        warn!("DMA P2M write (MINC=0) failed addr=0x{:08x} e={}", mem_addr, UniErr(e));
-                        ok = false;
-                    }
-                }
-            }
-
-            Dir::Write => {
-                // M2P: read from memory into peripheral
-                let mem_total = self.mem_data_size();
-                let peri_offset = peri_addr - peri.map(|p| p.start).unwrap_or(peri_addr);
-
-                let buf = if minc {
-                    sys.uc.borrow().mem_read_as_vec(mem_addr.into(), mem_total)
-                        .map_err(|e| warn!("DMA M2P read failed addr=0x{:08x} size={} e={}", mem_addr, mem_total, UniErr(e)))
-                        .map(|v| v.into())
-                        .ok()
-                } else {
-                    // Fixed memory: read one item and repeat for NDTR beats
-                    sys.uc.borrow().mem_read_as_vec(mem_addr.into(), msize)
-                        .ok()
-                        .map(|v| {
-                            let mut buf = std::collections::VecDeque::new();
-                            for _ in 0..ndtr { buf.extend(v.iter()); }
-                            buf
+                    } else {
+                        let peri_offset = peri_addr - peri.map(|p| p.start).unwrap_or(peri_addr);
+                        let b = peri.map(|p| {
+                            p.peripheral.borrow_mut().set_dma_rx_dest(mem_addr);
+                            p.peripheral.borrow_mut().read_dma(sys, peri_offset, peri_total)
+                        });
+                        b.unwrap_or_else(|| {
+                            let mut v = std::collections::VecDeque::new();
+                            v.extend(std::iter::repeat(0u8).take(peri_total));
+                            v
                         })
-                };
+                    };
 
-                let buf = buf.unwrap_or_else(|| {
-                    ok = false;
-                    let mut v = std::collections::VecDeque::new();
-                    v.extend(std::iter::repeat(0u8).take(mem_total));
-                    v
-                });
-
-                trace!("{} xfer M2P buf_len={}", dma_name, buf.len());
-
-                if pinc {
-                    // Peripheral address increments: write psize bytes per beat
-                    let bytes: Vec<u8> = buf.into_iter().collect();
-                    for beat in 0..ndtr {
-                        let beat_offset = peri_offset + (beat * psize) as u32;
-                        let slice = &bytes[beat*psize..(beat*psize+psize).min(bytes.len())];
-                        if let Some(p) = peri {
-                            p.peripheral.borrow_mut().write_dma(sys, beat_offset, slice.iter().copied().collect());
-                        } else {
+                    if minc {
+                        if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), buf.make_contiguous()) {
+                            warn!("DMA P2M write failed addr=0x{:08x} size={} e={}", mem_addr, mem_total, UniErr(e));
+                            ok = false;
+                        }
+                    } else {
+                        let bytes = buf.make_contiguous();
+                        if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), &bytes[bytes.len().saturating_sub(msize)..]) {
+                            warn!("DMA P2M write (MINC=0) failed addr=0x{:08x} e={}", mem_addr, UniErr(e));
                             ok = false;
                         }
                     }
-                } else if let Some(p) = peri {
-                    p.peripheral.borrow_mut().write_dma(sys, peri_offset, buf);
-                } else {
-                    ok = false;
                 }
-            }
 
-            Dir::MemCopy => {
-                let mem_total = self.mem_data_size();
-                let src = peri_addr;
-                let dst = mem_addr;
+                Dir::Write => {
+                    // M2P: read from memory into peripheral
+                    let peri_offset = peri_addr - peri.map(|p| p.start).unwrap_or(peri_addr);
 
-                let buf = sys.uc.borrow().mem_read_as_vec(src.into(), mem_total)
-                    .map_err(|e| warn!("DMA MemCopy read failed src=0x{:08x} size={} e={}", src, mem_total, UniErr(e)))
-                    .ok();
+                    let buf = if minc {
+                        sys.uc.borrow().mem_read_as_vec(mem_addr.into(), mem_total)
+                            .map_err(|e| warn!("DMA M2P read failed addr=0x{:08x} size={} e={}", mem_addr, mem_total, UniErr(e)))
+                            .map(|v| v.into())
+                            .ok()
+                    } else {
+                        sys.uc.borrow().mem_read_as_vec(mem_addr.into(), msize)
+                            .ok()
+                            .map(|v| {
+                                let mut out = std::collections::VecDeque::new();
+                                for _ in 0..beats {
+                                    out.extend(v.iter());
+                                }
+                                out
+                            })
+                    };
 
-                if let Some(buf) = buf {
-                    if let Err(e) = sys.uc.borrow_mut().mem_write(dst.into(), &buf) {
-                        warn!("DMA MemCopy write failed dst=0x{:08x} size={} e={}", dst, mem_total, UniErr(e));
+                    let buf = buf.unwrap_or_else(|| {
+                        ok = false;
+                        let mut v = std::collections::VecDeque::new();
+                        v.extend(std::iter::repeat(0u8).take(mem_total));
+                        v
+                    });
+
+                    if pinc {
+                        let bytes: Vec<u8> = buf.into_iter().collect();
+                        for beat in 0..beats {
+                            let beat_offset = peri_offset + (beat * psize) as u32;
+                            let start = beat * psize;
+                            let end = (start + psize).min(bytes.len());
+                            let slice = &bytes[start..end];
+                            if let Some(p) = peri {
+                                p.peripheral.borrow_mut().write_dma(sys, beat_offset, slice.iter().copied().collect());
+                            } else {
+                                ok = false;
+                            }
+                        }
+                    } else if let Some(p) = peri {
+                        p.peripheral.borrow_mut().write_dma(sys, peri_offset, buf);
+                    } else {
                         ok = false;
                     }
-                } else {
-                    ok = false;
                 }
+
+                Dir::MemCopy => {
+                    let src = peri_addr;
+                    let dst = mem_addr;
+
+                    let buf = sys.uc.borrow().mem_read_as_vec(src.into(), mem_total)
+                        .map_err(|e| warn!("DMA MemCopy read failed src=0x{:08x} size={} e={}", src, mem_total, UniErr(e)))
+                        .ok();
+
+                    if let Some(buf) = buf {
+                        if let Err(e) = sys.uc.borrow_mut().mem_write(dst.into(), &buf) {
+                            warn!("DMA MemCopy write failed dst=0x{:08x} size={} e={}", dst, mem_total, UniErr(e));
+                            ok = false;
+                        }
+                    } else {
+                        ok = false;
+                    }
+                }
+
+                Dir::Invalid => {}
             }
 
-            Dir::Invalid => {}
+            if minc {
+                mem_addr = mem_addr.wrapping_add((beats * msize) as u32);
+            }
+            if pinc {
+                peri_addr = peri_addr.wrapping_add((beats * psize) as u32);
+            }
+
+            remaining_beats -= beats;
         }
 
         ok
