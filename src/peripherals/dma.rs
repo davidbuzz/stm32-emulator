@@ -109,6 +109,15 @@ impl Dma {
             }
         }
     }
+
+    fn has_request_conflict(&self, stream_idx: usize, channel: u8, par: u32) -> bool {
+        self.streams.iter().enumerate().any(|(idx, s)| {
+            idx != stream_idx
+                && (s.cr & 1) != 0
+                && s.channel() == channel
+                && s.par == par
+        })
+    }
 }
 
 impl Peripheral for Dma {
@@ -147,6 +156,27 @@ impl Peripheral for Dma {
             }
             Access::Reg(_) => {}
             Access::StreamReg(i, offset) => {
+                if offset == 0x0000 && (value & 1) != 0 {
+                    let channel = ((value >> 25) & 0b111) as u8;
+                    let par = self.streams[i].par;
+                    if self.has_request_conflict(i, channel, par) {
+                        self.set_teif(i);
+                        if (value & (1 << 2)) != 0 {
+                            if let Some(irq) = self.stream_irq(i) {
+                                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                            }
+                        }
+                        warn!(
+                            "{} stream={} blocked conflicting request channel={} par=0x{:08x}",
+                            self.name,
+                            i,
+                            channel,
+                            par
+                        );
+                        return;
+                    }
+                }
+
                 match self.streams[i].write(&self.name, i, sys, offset, value) {
                     StreamWriteResult::Completed { half } => {
                         if half {
