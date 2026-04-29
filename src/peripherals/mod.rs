@@ -28,6 +28,7 @@ pub mod sw_spi;
 pub mod sdio;
 pub mod tim;
 pub mod exti;
+pub mod meta;
 
 use adc::*;
 use rcc::*;
@@ -49,6 +50,7 @@ use core_debug::*;
 use sw_spi::*;
 use tim::*;
 use exti::*;
+use meta::DeviceMeta;
 
 use std::{collections::{BTreeMap, VecDeque, HashMap}, cell::RefCell};
 use svd_parser::svd::{RegisterInfo, Device as SvdDevice};
@@ -82,7 +84,7 @@ impl Peripherals {
         (0xE000_0000, 0xE100_0000),
     ];
 
-    pub fn register_peripheral(&mut self, name: String, base: u32, registers: &[RegisterInfo], ext_devices: &ExtDevices) {
+    pub fn register_peripheral(&mut self, name: String, base: u32, registers: &[RegisterInfo], ext_devices: &ExtDevices, meta: &DeviceMeta) {
         let p = GenericPeripheral::new(name.clone(), registers);
 
         let (start, end) = (base, base+p.size());
@@ -108,7 +110,7 @@ impl Peripherals {
             .or_else(||       Flash::new(&name))
             .or_else(||         Rcc::new(&name))
             .or_else(||         Pwr::new(&name))
-            .or_else(||         I2c::new(&name))
+            .or_else(||         I2c::new(&name, meta))
             .or_else(||         Dma::new(&name))
             .or_else(||       OtgFs::new(&name))
             .or_else(||         Tim::new(&name))
@@ -143,6 +145,7 @@ impl Peripherals {
 
     pub fn from_svd(mut svd_device: SvdDevice, config: PeripheralsConfig, gpio: GpioPorts, ext_devices: &ExtDevices) -> Self {
         let mut peripherals = Self { gpio: RefCell::new(gpio), .. Peripherals::default() };
+        let device_meta = DeviceMeta::from_svd(&svd_device);
 
         svd_device.peripherals.sort_by_key(|f| f.base_address);
         let svd_peripherals = svd_device.peripherals.iter()
@@ -163,7 +166,7 @@ impl Peripherals {
 
             let regs = crate::util::extract_svd_registers(p);
 
-            peripherals.register_peripheral(name.to_string(), base as u32, &regs, ext_devices);
+            peripherals.register_peripheral(name.to_string(), base as u32, &regs, ext_devices, &device_meta);
 
             if crate::verbose() >= 3 {
                 for r in &regs {

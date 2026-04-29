@@ -10,11 +10,12 @@
 // Datasheet/reference anchor: STM32F4 RM I2C chapter.
 
 use crate::system::System;
-use super::Peripheral;
+use super::{Peripheral, meta::DeviceMeta};
 
-#[derive(Default)]
 pub struct I2c {
     name: String,
+    event_irq: i32, // resolved from SVD via DeviceMeta at construction
+    error_irq: i32,
     cr1: u32,
     cr2: u32,
     oar1: u32,
@@ -31,30 +32,31 @@ pub struct I2c {
 }
 
 impl I2c {
-    pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
+    pub fn new(name: &str, meta: &DeviceMeta) -> Option<Box<dyn Peripheral>> {
         if name.starts_with("I2C") {
-            let name = name.to_string();
-            Some(Box::new(Self { name, trise: 0x0000_0002, ..I2c::default() }))
+            // Look up IRQ numbers from SVD.  Fall back to STM32F427 RM values if SVD
+            // doesn't list them (e.g. derived peripherals that inherit interrupt entries).
+            let ev_name = format!("{}_EV", name);
+            let er_name = format!("{}_ER", name);
+            let (event_irq, error_irq) = match name {
+                "I2C1" => (meta.irq_of(&ev_name).unwrap_or(31), meta.irq_of(&er_name).unwrap_or(32)),
+                "I2C2" => (meta.irq_of(&ev_name).unwrap_or(33), meta.irq_of(&er_name).unwrap_or(34)),
+                "I2C3" => (meta.irq_of(&ev_name).unwrap_or(72), meta.irq_of(&er_name).unwrap_or(73)),
+                _      => return None, // unknown I2C instance — don't register
+            };
+            Some(Box::new(Self {
+                name: name.to_string(),
+                event_irq,
+                error_irq,
+                trise: 0x0000_0002,
+                cr1: 0, cr2: 0, oar1: 0, oar2: 0, dr: 0,
+                sr1: 0, sr2: 0, ccr: 0, fltr: 0,
+                awaiting_address: false,
+                pending_event_irq: None,
+                pending_error_irq: None,
+            }))
         } else {
             None
-        }
-    }
-
-    fn event_irq(&self) -> i32 {
-        match self.name.as_str() {
-            "I2C1" => 31,
-            "I2C2" => 33,
-            "I2C3" => 72,
-            _ => unreachable!("unknown I2C instance {}", self.name),
-        }
-    }
-
-    fn error_irq(&self) -> i32 {
-        match self.name.as_str() {
-            "I2C1" => 32,
-            "I2C2" => 34,
-            "I2C3" => 73,
-            _ => unreachable!("unknown I2C instance {}", self.name),
         }
     }
 
@@ -193,7 +195,7 @@ impl Peripheral for I2c {
             if *delay == 0 {
                 self.pending_event_irq = None;
                 if self.cr2 & I2C_CR2_ITEVTEN != 0 {
-                    sys.p.nvic.borrow_mut().set_intr_pending(self.event_irq());
+                    sys.p.nvic.borrow_mut().set_intr_pending(self.event_irq);
                 }
             }
         }
@@ -205,7 +207,7 @@ impl Peripheral for I2c {
             if *delay == 0 {
                 self.pending_error_irq = None;
                 if self.cr2 & I2C_CR2_ITERREN != 0 {
-                    sys.p.nvic.borrow_mut().set_intr_pending(self.error_irq());
+                    sys.p.nvic.borrow_mut().set_intr_pending(self.error_irq);
                 }
             }
         }

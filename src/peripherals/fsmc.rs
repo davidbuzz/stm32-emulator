@@ -101,6 +101,15 @@ pub trait FsmcDevice {
 pub struct Bank {
     pub name: String,
     ext_device: Option<Rc<RefCell<dyn ExtDevice<u32, u32>>>>,
+    // Control/timing register state.  Reset values from STM32F4 RM FSMC chapter.
+    bcr: u32,   // Bank Control Register (BCR1 reset=0x000030D2, BCR2-4 reset=0x000030D0)
+    btr: u32,   // Bank Timing Register  (reset=0xFFFFFFFF)
+    bwtr: u32,  // Bank Write Timing Register (reset=0x0FFF_FFFF)
+    pcr: u32,   // NAND/PCCARD Control Register (reset=0x0000_0018)
+    sr: u32,    // FIFO Status Register (FEMPT=bit6=1 always means FIFO empty)
+    pmem: u32,  // Common memory timing (reset=0xFCFCFCFC)
+    patt: u32,  // Attribute memory timing (reset=0xFCFCFCFC)
+    pio: u32,   // I/O space timing (reset=0xFCFCFCFC)
 }
 
 impl Bank {
@@ -112,7 +121,21 @@ impl Bank {
             .map(|d| d.borrow_mut().connect_peripheral(&name))
             .unwrap_or(name);
 
-        Self { name, ext_device }
+        // BCR1 has FACCEN bit set (bit 6); BCR2-4 do not.
+        let bcr = if bank == 0 { 0x0000_30D2 } else { 0x0000_30D0 };
+
+        Self {
+            name,
+            ext_device,
+            bcr,
+            btr: 0xFFFF_FFFF,
+            bwtr: 0x0FFF_FFFF,
+            pcr: 0x0000_0018,
+            sr: 0x0000_0040, // FEMPT=1
+            pmem: 0xFCFC_FCFC,
+            patt: 0xFCFC_FCFC,
+            pio: 0xFCFC_FCFC,
+        }
     }
 
     fn read_data(&mut self, sys: &System, offset: u32) -> u32 {
@@ -134,12 +157,34 @@ impl Bank {
     }
 
     fn read_reg(&mut self, _sys: &System, reg: Reg) -> u32 {
-        trace!("{} read reg={:?}", self.name, reg);
-        0
+        let v = match reg {
+            Reg::BCR  => self.bcr,
+            Reg::BTR  => self.btr,
+            Reg::BWTR => self.bwtr,
+            Reg::PCR  => self.pcr,
+            Reg::SR   => self.sr | 0x40, // FEMPT always set
+            Reg::PMEM => self.pmem,
+            Reg::PATT => self.patt,
+            Reg::PIO  => self.pio,
+            Reg::ECCR | Reg::Invalid => 0,
+        };
+        trace!("{} read reg={:?} value=0x{:08x}", self.name, reg, v);
+        v
     }
 
-    fn write_reg(&mut self, _sys: &System, reg: Reg, _value: u32) {
-        trace!("{} write reg={:?}", self.name, reg);
+    fn write_reg(&mut self, _sys: &System, reg: Reg, value: u32) {
+        trace!("{} write reg={:?} value=0x{:08x}", self.name, reg, value);
+        match reg {
+            Reg::BCR  => self.bcr  = value,
+            Reg::BTR  => self.btr  = value,
+            Reg::BWTR => self.bwtr = value,
+            Reg::PCR  => self.pcr  = value,
+            Reg::SR   => {} // SR is read-only (FEMPT is status)
+            Reg::PMEM => self.pmem = value,
+            Reg::PATT => self.patt = value,
+            Reg::PIO  => self.pio  = value,
+            Reg::ECCR | Reg::Invalid => {}
+        }
     }
 }
 
