@@ -5,8 +5,8 @@
 // Key registers: LISR/HISR/LIFCR/HIFCR plus stream windows at 0x10 + n*0x18.
 // Key behavior: stream EN, NDTR countdown, PAR/MxAR addressing, TCIF status bits.
 // Critical for this emulator: firmware uses DMA completion flags and IRQs for boot/runtime.
-// Current model: per-beat PINC/MINC, circular-mode NDTR reload, TC IRQ from both EN=1 and step().
-// Still incomplete: FIFO thresholds, HT/TE signaling, double-buffer mode, stream arbitration.
+// Current model: per-beat PINC/MINC, circular-mode NDTR reload, and TC/HT/TE/DME/FE class flags.
+// Still incomplete: FIFO thresholds/behavioral depth, double-buffer mode details, stream arbitration.
 // Datasheet/reference anchors: STM32F4 RM DMA chapter and cubeblack/STM32F4_DMA.md.
 
 use crate::util::UniErr;
@@ -62,6 +62,24 @@ impl Dma {
         }
     }
 
+    fn set_dmeif(&mut self, stream: usize) {
+        let bit = dmeif_mask(stream);
+        if stream < 4 {
+            self.lisr |= bit;
+        } else {
+            self.hisr |= bit;
+        }
+    }
+
+    fn set_feif(&mut self, stream: usize) {
+        let bit = feif_mask(stream);
+        if stream < 4 {
+            self.lisr |= bit;
+        } else {
+            self.hisr |= bit;
+        }
+    }
+
     fn stream_irq(&self, stream: usize) -> Option<i32> {
         // STM32F427 IRQ numbers for DMA stream interrupts.
         // DMA1 Stream0..6 -> 11..17
@@ -110,6 +128,24 @@ impl Dma {
         }
     }
 
+    fn signal_dme(&mut self, sys: &System, stream_idx: usize) {
+        self.set_dmeif(stream_idx);
+        if self.streams[stream_idx].dmeie_enabled() {
+            if let Some(irq) = self.stream_irq(stream_idx) {
+                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+            }
+        }
+    }
+
+    fn signal_fe(&mut self, sys: &System, stream_idx: usize) {
+        self.set_feif(stream_idx);
+        if self.streams[stream_idx].feie_enabled() {
+            if let Some(irq) = self.stream_irq(stream_idx) {
+                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+            }
+        }
+    }
+
     fn has_request_conflict(&self, stream_idx: usize, channel: u8, par: u32) -> bool {
         self.streams.iter().enumerate().any(|(idx, s)| {
             idx != stream_idx
@@ -131,7 +167,13 @@ impl Peripheral for Dma {
                     }
                     self.signal_tc(sys, i);
                 }
-                StreamStepResult::TransferError => self.signal_te(sys, i),
+                StreamStepResult::TransferError => {
+                    self.signal_te(sys, i);
+                    self.signal_dme(sys, i);
+                    if self.streams[i].fifo_enabled() {
+                        self.signal_fe(sys, i);
+                    }
+                }
                 StreamStepResult::Noop => {}
             }
         }
@@ -160,11 +202,10 @@ impl Peripheral for Dma {
                     let channel = ((value >> 25) & 0b111) as u8;
                     let par = self.streams[i].par;
                     if self.has_request_conflict(i, channel, par) {
-                        self.set_teif(i);
-                        if (value & (1 << 2)) != 0 {
-                            if let Some(irq) = self.stream_irq(i) {
-                                sys.p.nvic.borrow_mut().set_intr_pending(irq);
-                            }
+                        self.signal_te(sys, i);
+                        self.signal_dme(sys, i);
+                        if self.streams[i].fifo_enabled() {
+                            self.signal_fe(sys, i);
                         }
                         warn!(
                             "{} stream={} blocked conflicting request channel={} par=0x{:08x}",
@@ -184,7 +225,13 @@ impl Peripheral for Dma {
                         }
                         self.signal_tc(sys, i);
                     }
-                    StreamWriteResult::TransferError => self.signal_te(sys, i),
+                    StreamWriteResult::TransferError => {
+                        self.signal_te(sys, i);
+                        self.signal_dme(sys, i);
+                        if self.streams[i].fifo_enabled() {
+                            self.signal_fe(sys, i);
+                        }
+                    }
                     StreamWriteResult::Noop => {}
                 }
             }
@@ -217,6 +264,18 @@ impl Stream {
 
     fn teie_enabled(&self) -> bool {
         self.cr & (1 << 2) != 0
+    }
+
+    fn dmeie_enabled(&self) -> bool {
+        self.cr & (1 << 1) != 0
+    }
+
+    fn feie_enabled(&self) -> bool {
+        self.fcr & (1 << 7) != 0
+    }
+
+    fn fifo_enabled(&self) -> bool {
+        self.fcr & (1 << 2) != 0
     }
 
     fn channel(&self) -> u8 {
@@ -700,6 +759,26 @@ fn teif_mask(stream: usize) -> u32 {
         1 => 1 << 9,
         2 => 1 << 19,
         3 => 1 << 25,
+        _ => 0,
+    }
+}
+
+fn dmeif_mask(stream: usize) -> u32 {
+    match stream % 4 {
+        0 => 1 << 2,
+        1 => 1 << 8,
+        2 => 1 << 18,
+        3 => 1 << 24,
+        _ => 0,
+    }
+}
+
+fn feif_mask(stream: usize) -> u32 {
+    match stream % 4 {
+        0 => 1 << 0,
+        1 => 1 << 6,
+        2 => 1 << 16,
+        3 => 1 << 22,
         _ => 0,
     }
 }
