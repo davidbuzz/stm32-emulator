@@ -31,7 +31,7 @@ fn thumb(pc: u64) -> u64 {
 // PC + instruction size
 pub static mut LAST_INSTRUCTION: (u32, u8) = (0,0);
 pub static NUM_INSTRUCTIONS: AtomicU64 = AtomicU64::new(0);
-static CONTINUE_EXECUTION: AtomicBool = AtomicBool::new(false);
+pub(crate) static CONTINUE_EXECUTION: AtomicBool = AtomicBool::new(false);
 static BUSY_LOOP_REACHED: AtomicBool = AtomicBool::new(false);
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -102,6 +102,11 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
     let (sys, framebuffers) = crate::system::prepare(&mut uc, config, svd_device)?;
     sys.p.nvic.borrow_mut().vector_table_addr = vector_table_addr;
 
+    // GDB shared state: breakpoints set and hit flag.  Both are Rc so they can be
+    // captured by the code hook closure (single-threaded) and owned by GdbTarget.
+    let gdb_shared = crate::gdb::GdbShared::new();
+    let (gdb_breakpoints, gdb_bp_hit) = gdb_shared.clone_handles();
+
     let diassembler = Capstone::new()
         .arm()
         .mode(arch::arm::ArchMode::Thumb)
@@ -118,7 +123,18 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         let d = sys.d.clone();
         let interrupt_period = args.interrupt_period;
         let deferred_irq = deferred_irq.clone();
+        let gdb_breakpoints_hook = gdb_breakpoints.clone();
+        let gdb_bp_hit_hook = gdb_bp_hit.clone();
         sys.uc.borrow_mut().add_code_hook(0, u64::MAX, move |uc, pc, size| {
+            // GDB software breakpoint check — must run before other hook logic.
+            {
+                let bps = gdb_breakpoints_hook.borrow();
+                if !bps.is_empty() && bps.contains(&(pc as u32)) {
+                    gdb_bp_hit_hook.set(true);
+                    uc.emu_stop().unwrap();
+                    return;
+                }
+            }
             unsafe {
                 if busy_loop_stop && LAST_INSTRUCTION.0 == pc as u32 {
                     let sp = uc.reg_read(RegisterARM::SP).unwrap_or(0);
@@ -358,7 +374,35 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
     let vector_table = VectorTable::from_memory(&sys.uc.borrow(), vector_table_addr)?;
     let mut pc = vector_table.reset as u64;
     sys.uc.borrow_mut().reg_write(RegisterARM::SP, vector_table.sp.into()).map_err(UniErr)?;
-    //uc.reg_write(RegisterARM::LR, 0xFFFF_FFFF).map_err(UniErr)?;
+    // Keep architectural state coherent for debugger attach before first emu_start.
+    sys.uc.borrow_mut().reg_write(RegisterARM::PC, thumb(pc)).map_err(UniErr)?;
+
+    // ── GDB mode: hand off to GDB server instead of running the normal loop ──
+    if let Some(gdb_port) = args.gdb {
+        let p = sys.p.clone();
+        let d = sys.d.clone();
+        // Drop sys to release the &mut borrow on uc before we pass uc to GdbTarget.
+        drop(sys);
+
+        let target = crate::gdb::GdbTarget::new(
+            &mut uc,
+            p,
+            d,
+            deferred_irq,
+            &gdb_shared,
+            thumb(pc),
+            args.stop_addr,
+        );
+
+        info!("GDB mode: emulator paused at reset vector 0x{:08x}", pc);
+        crate::gdb::run_gdb_server(target, gdb_port)?;
+
+        for fb in framebuffers.images {
+            fb.borrow().write_to_disk()?;
+        }
+        return Ok(());
+    }
+    // ── Normal run loop ───────────────────────────────────────────────────────
 
     info!("Starting emulation");
 

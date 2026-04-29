@@ -2,6 +2,7 @@
 
 mod config;
 mod emulator;
+mod gdb;
 mod util;
 mod peripherals;
 mod ext_devices;
@@ -61,6 +62,11 @@ pub struct Args {
     /// Print only ArduPilot console output (USB CDC EP1). Suppresses all emulator log noise.
     #[clap(long)]
     console_only: bool,
+
+    /// Enable GDB RSP server on the given TCP port (e.g. --gdb 3333).
+    /// The emulator halts at the reset vector and waits for a GDB connection.
+    #[clap(long)]
+    gdb: Option<u16>,
 }
 
 #[derive(clap::ArgEnum, Clone, Copy, Debug)]
