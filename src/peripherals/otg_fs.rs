@@ -57,15 +57,25 @@ const DIEPCTL_NAKSTS: u32 = 1 << 17;
 const DTXFSTS_RESET_WORDS: u32 = 0x80;
 const GINTSTS_RXFLVL: u32 = 1 << 4;
 // GRXSTSP PKTSTS field: bits [20:17].  6=setup data received, 4=setup complete.
+const GRXSTSP_PKTSTS_OUT_DATA: u32 = 2 << 17;
+const GRXSTSP_PKTSTS_OUT_COMPL: u32 = 3 << 17;
 const GRXSTSP_PKTSTS_SETUP_DATA: u32 = 6 << 17;
 const GRXSTSP_PKTSTS_SETUP_COMPL: u32 = 4 << 17;
 const GRXSTSP_BCNT_8: u32 = 8 << 4; // BCNT=8 in bits[14:4]
+const GRXSTSP_BCNT_7: u32 = 7 << 4; // BCNT=7 in bits[14:4]
 
 // Minimal USB enumeration setup packets (2xu32 little-endian bytes).
 // SET_ADDRESS 1: 00 05 01 00  00 00 00 00
 const SETUP_SET_ADDRESS: [u32; 2] = [0x0001_0500, 0x0000_0000];
 // SET_CONFIGURATION 1: 00 09 01 00  00 00 00 00
 const SETUP_SET_CONFIG: [u32; 2] = [0x0001_0900, 0x0000_0000];
+// CDC ACM SET_LINE_CODING (7-byte payload): 21 20 00 00  00 00 07 00
+const SETUP_CDC_SET_LINE_CODING: [u32; 2] = [0x0000_2021, 0x0007_0000];
+// CDC ACM GET_LINE_CODING: A1 21 00 00  00 00 07 00
+const SETUP_CDC_GET_LINE_CODING: [u32; 2] = [0x0000_21a1, 0x0007_0000];
+const CDC_LINE_CODING_115200_8N1: [u32; 2] = [0x0001_c200, 0x0008_0000];
+// CDC ACM SET_CONTROL_LINE_STATE (DTR|RTS): 21 22 03 00  00 00 00 00
+const SETUP_CDC_SET_CONTROL_LINE_STATE: [u32; 2] = [0x0003_2221, 0x0000_0000];
 
 /// State of the EP0 RX FIFO / GRXSTSP pop sequence for a synthetic setup packet.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -76,6 +86,10 @@ enum Ep0RxState {
     RxFlvlFifoPending,     // PKTSTS=6 returned; waiting for 2 FIFO word reads
     RxFlvlCompletePending, // 2 words consumed; will return PKTSTS=4 on next pop
     StupPending,           // PKTSTS=4 returned; will fire DOEPINT0.STUP
+    OutDataStatusPending,  // will return PKTSTS=2 BCNT=7 on next GRXSTSP pop
+    OutDataFifoPending,    // PKTSTS=2 returned; waiting for 2 FIFO word reads
+    OutCompletePending,    // 2 words consumed; will return PKTSTS=3 on next pop
+    OutXfrcPending,        // PKTSTS=3 returned; will fire DOEPINT0.XFRC
 }
 
 /// Which step of the synthetic USB enumeration sequence are we on.
@@ -85,6 +99,9 @@ enum UsbEnumStage {
     Idle,
     DeliverSetAddress,    // send SET_ADDRESS 1 setup packet
     DeliverSetConfig,     // send SET_CONFIGURATION 1 setup packet
+    DeliverGetLineCoding, // send CDC ACM GET_LINE_CODING
+    DeliverSetLineCoding, // send CDC ACM SET_LINE_CODING
+    DeliverSetControlLineState, // send CDC ACM SET_CONTROL_LINE_STATE (DTR/RTS)
     Configured,           // enumeration done
 }
 
@@ -128,6 +145,7 @@ struct OtgFsState {
     irq_latched: bool,
     ep0_rx_state: Ep0RxState,
     ep0_pending_setup: [u32; 2],
+    ep0_pending_out_data: [u32; 2],
     ep0_fifo_read_count: u8,
     ep0_setup_inflight: bool,
     ep0_in_transfer_pending: bool,
@@ -196,6 +214,23 @@ impl OtgFs {
 }
 
 impl OtgFsState {
+    fn enum_stage_setup_packet(stage: UsbEnumStage) -> Option<([u32; 2], &'static str)> {
+        match stage {
+            UsbEnumStage::DeliverSetAddress => Some((SETUP_SET_ADDRESS, "SetAddress")),
+            UsbEnumStage::DeliverSetConfig => Some((SETUP_SET_CONFIG, "SetConfig")),
+            UsbEnumStage::DeliverGetLineCoding => {
+                Some((SETUP_CDC_GET_LINE_CODING, "GetLineCoding"))
+            }
+            UsbEnumStage::DeliverSetLineCoding => {
+                Some((SETUP_CDC_SET_LINE_CODING, "SetLineCoding"))
+            }
+            UsbEnumStage::DeliverSetControlLineState => {
+                Some((SETUP_CDC_SET_CONTROL_LINE_STATE, "SetControlLineState"))
+            }
+            UsbEnumStage::Configured | UsbEnumStage::Idle => None,
+        }
+    }
+
     fn maybe_arm_startup_events(&mut self) {
         if self.startup_stage == StartupStage::Idle
             && self.gccfg != 0
@@ -316,16 +351,11 @@ impl OtgFsState {
 
         self.diepctl[ep] = reg;
 
-        if ep > 0 && value & DIEPCTL_USBAEP != 0 && self.diepctl[ep] & DIEPCTL_USBAEP != 0 {
-            info!("OTG_FS: EP{} USBAEP set (endpoint enabled/configured)", ep);
-        }
-
         if value & DIEPCTL_EPENA != 0 {
             if ep == 0 {
                 self.ep0_in_transfer_pending = true;
             } else {
                 otg_debug!("DIEPCTL{ep} EPENA set dieptsiz={:#010x} diepempmsk={:#010x}", self.dieptsiz[ep], self.diepempmsk);
-                info!("OTG_FS: EP{} EPENA set (CDC endpoint activated)", ep);
                 if ep < EP_COUNT {
                     self.ep_in_transfer_pending[ep] = true;
                     self.ep_txfe_was_fired[ep] = false;
@@ -428,6 +458,16 @@ impl OtgFsState {
                         self.gintsts &= !GINTSTS_RXFLVL;
                         GRXSTSP_PKTSTS_SETUP_COMPL
                     }
+                    Ep0RxState::OutDataStatusPending => {
+                        self.ep0_rx_state = Ep0RxState::OutDataFifoPending;
+                        self.ep0_fifo_read_count = 0;
+                        GRXSTSP_PKTSTS_OUT_DATA | GRXSTSP_BCNT_7
+                    }
+                    Ep0RxState::OutCompletePending => {
+                        self.ep0_rx_state = Ep0RxState::OutXfrcPending;
+                        self.gintsts &= !GINTSTS_RXFLVL;
+                        GRXSTSP_PKTSTS_OUT_COMPL
+                    }
                     _ => self.grxstsr,
                 };
                 otg_debug!("GRXSTSP pop at 0x{:03x} state_after={:?} result={:#010x}", offset, self.ep0_rx_state, result);
@@ -502,6 +542,14 @@ impl OtgFsState {
             0x0018 => self.daint &= !value,
             0x001c => self.daintmsk = value,
             0x0034 => {
+                if (value ^ self.diepempmsk) & (1 << 1) != 0 {
+                    info!(
+                        "OTG_FS: DIEPEMPMSK write old={:#010x} new={:#010x} ep1_enabled={}",
+                        self.diepempmsk,
+                        value,
+                        (value & (1 << 1)) != 0
+                    );
+                }
                 self.diepempmsk = value;
                 for ep in 0..EP_COUNT {
                     if value & (1 << ep) != 0 && self.diepctl[ep] & DIEPCTL_EPENA != 0 {
@@ -616,13 +664,8 @@ impl Peripheral for OtgFs {
             && shared.doepint[0] & DOEPINT_STUP == 0
             && !shared.ep0_setup_inflight
         {
-            let maybe_pkt = match shared.enum_stage {
-                UsbEnumStage::DeliverSetAddress => Some(SETUP_SET_ADDRESS),
-                UsbEnumStage::DeliverSetConfig => Some(SETUP_SET_CONFIG),
-                _ => None,
-            };
-            if let Some(pkt) = maybe_pkt {
-                info!("OTG_FS: delivering {} SETUP packet to EP0", if pkt == SETUP_SET_ADDRESS { "SetAddress" } else { "SetConfig" });
+            if let Some((pkt, label)) = OtgFsState::enum_stage_setup_packet(shared.enum_stage) {
+                info!("OTG_FS: delivering {} SETUP packet to EP0", label);
                 shared.ep0_pending_setup = pkt;
                 shared.ep0_rx_state = Ep0RxState::RxFlvlStatusPending;
                 shared.ep0_setup_inflight = true;
@@ -642,18 +685,40 @@ impl Peripheral for OtgFs {
 
         if matches!(
             shared.ep0_rx_state,
-            Ep0RxState::RxFlvlFifoPending | Ep0RxState::RxFlvlCompletePending
+            Ep0RxState::RxFlvlFifoPending
+                | Ep0RxState::RxFlvlCompletePending
+                | Ep0RxState::OutDataFifoPending
+                | Ep0RxState::OutCompletePending
         ) {
             shared.gintsts |= GINTSTS_RXFLVL;
         }
 
         if shared.ep0_rx_state == Ep0RxState::StupPending && ep0_armed {
-            info!("OTG_FS: StupPending fires → DOEPINT STUP|XFRC  (enum_stage={:?})", shared.enum_stage);
-            shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP | DOEPINT_XFRC);
-            shared.ep0_rx_state = Ep0RxState::Idle;
+            if shared.enum_stage == UsbEnumStage::DeliverSetLineCoding {
+                info!("OTG_FS: StupPending fires → DOEPINT STUP (enum_stage=DeliverSetLineCoding), scheduling OUT data");
+                shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP);
+                shared.ep0_pending_out_data = CDC_LINE_CODING_115200_8N1;
+                shared.ep0_rx_state = Ep0RxState::OutDataStatusPending;
+                shared.gintsts |= GINTSTS_RXFLVL;
+            } else if shared.enum_stage == UsbEnumStage::DeliverGetLineCoding {
+                info!("OTG_FS: StupPending fires → DOEPINT STUP (enum_stage=DeliverGetLineCoding)");
+                shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP);
+                shared.ep0_rx_state = Ep0RxState::Idle;
+            } else {
+                info!("OTG_FS: StupPending fires → DOEPINT STUP|XFRC  (enum_stage={:?})", shared.enum_stage);
+                shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP | DOEPINT_XFRC);
+                shared.ep0_rx_state = Ep0RxState::Idle;
+            }
             // Force irq_latched false so the new OEPINT bit triggers a fresh IRQ 67 raise.
             // Without this, irq_latched stays true from the previous RXFLVL raise and the
             // firmware never re-enters the OTG ISR to service the SETUP packet.
+            shared.irq_latched = false;
+        }
+
+        if shared.ep0_rx_state == Ep0RxState::OutXfrcPending && ep0_armed {
+            info!("OTG_FS: EP0 OUT data complete → DOEPINT XFRC (enum_stage={:?})", shared.enum_stage);
+            shared.mark_out_endpoint_interrupt(0, DOEPINT_XFRC);
+            shared.ep0_rx_state = Ep0RxState::Idle;
             shared.irq_latched = false;
         }
 
@@ -671,7 +736,22 @@ impl Peripheral for OtgFs {
                     shared.ep0_setup_inflight = false;
                 }
                 UsbEnumStage::DeliverSetConfig  => {
-                    info!("OTG_FS: SetConfig ZLP done → Configured");
+                    info!("OTG_FS: SetConfig ZLP done → DeliverGetLineCoding");
+                    shared.enum_stage = UsbEnumStage::DeliverGetLineCoding;
+                    shared.ep0_setup_inflight = false;
+                }
+                UsbEnumStage::DeliverGetLineCoding => {
+                    info!("OTG_FS: GetLineCoding data done → DeliverSetLineCoding");
+                    shared.enum_stage = UsbEnumStage::DeliverSetLineCoding;
+                    shared.ep0_setup_inflight = false;
+                }
+                UsbEnumStage::DeliverSetLineCoding => {
+                    info!("OTG_FS: SetLineCoding ZLP done → DeliverSetControlLineState");
+                    shared.enum_stage = UsbEnumStage::DeliverSetControlLineState;
+                    shared.ep0_setup_inflight = false;
+                }
+                UsbEnumStage::DeliverSetControlLineState => {
+                    info!("OTG_FS: SetControlLineState ZLP done → Configured");
                     shared.enum_stage = UsbEnumStage::Configured;
                     shared.ep0_setup_inflight = false;
                 }
@@ -729,13 +809,25 @@ impl Peripheral for OtgFs {
 pub fn fifo_read(_ep: usize) -> u32 {
     OTG_FS_SHARED.with(|shared| {
         let mut s = shared.borrow_mut();
-        if s.ep0_rx_state == Ep0RxState::RxFlvlFifoPending {
+        if s.ep0_rx_state == Ep0RxState::RxFlvlFifoPending || s.ep0_rx_state == Ep0RxState::OutDataFifoPending {
             let idx = s.ep0_fifo_read_count as usize;
-            let word = if idx < 2 { s.ep0_pending_setup[idx] } else { 0 };
+            let word = if idx < 2 {
+                if s.ep0_rx_state == Ep0RxState::RxFlvlFifoPending {
+                    s.ep0_pending_setup[idx]
+                } else {
+                    s.ep0_pending_out_data[idx]
+                }
+            } else {
+                0
+            };
             s.ep0_fifo_read_count += 1;
             debug!("OTG_FS FIFO read idx={} word={:#010x} state_after={:?}", idx, word, s.ep0_rx_state);
             if s.ep0_fifo_read_count >= 2 {
-                s.ep0_rx_state = Ep0RxState::RxFlvlCompletePending;
+                s.ep0_rx_state = if s.ep0_rx_state == Ep0RxState::RxFlvlFifoPending {
+                    Ep0RxState::RxFlvlCompletePending
+                } else {
+                    Ep0RxState::OutCompletePending
+                };
             }
             word
         } else {

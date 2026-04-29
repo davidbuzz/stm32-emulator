@@ -16,7 +16,6 @@ use unicorn_engine::{RegisterARM, Unicorn};
 use crate::system::System;
 use super::Peripheral;
 
-#[derive(Default)]
 pub struct Nvic {
     pub vector_table_addr: u32,
     pub systick_period: Option<u32>,
@@ -25,9 +24,26 @@ pub struct Nvic {
     // 128 different interrupts. Good enough for now
     pending: u128,
     enabled: u128,
+    irq_priority: [u8; 128],
     active_exceptions: u32,
     exc_return_stack: Vec<u32>,
     exc_stack_state: Vec<(u64, i32)>,
+}
+
+impl Default for Nvic {
+    fn default() -> Self {
+        Self {
+            vector_table_addr: 0,
+            systick_period: None,
+            last_systick_trigger: 0,
+            pending: 0,
+            enabled: 0,
+            irq_priority: [0; 128],
+            active_exceptions: 0,
+            exc_return_stack: Vec::new(),
+            exc_stack_state: Vec::new(),
+        }
+    }
 }
 
 const IRQ_OFFSET: i32 = 16;
@@ -82,6 +98,86 @@ impl Nvic {
         self.next_dispatchable_bit().map(|bit| (bit as i32) - IRQ_OFFSET)
     }
 
+    fn irq_priority_value(&self, irq: i32) -> u8 {
+        if irq >= 0 {
+            self.irq_priority[irq as usize]
+        } else {
+            0
+        }
+    }
+
+    fn is_external_irq_dispatchable(&self, irq: i32, basepri: u32, current_active_prio: Option<u8>) -> bool {
+        let prio = self.irq_priority_value(irq);
+
+        // BASEPRI masks priorities numerically >= BASEPRI.
+        if basepri != 0 && (prio as u32) >= basepri {
+            return false;
+        }
+
+        // Nested preemption requires strictly higher priority.
+        if let Some(active_prio) = current_active_prio {
+            if prio >= active_prio {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn take_next_external_irq(&mut self, basepri: u32, current_active_prio: Option<u8>) -> Option<i32> {
+        let mut best_irq: Option<i32> = None;
+        let mut best_prio: u8 = u8::MAX;
+        let irq50_pending = self.is_intr_pending(50);
+        let irq67_pending = self.is_intr_pending(67);
+
+        for irq in 0..128 {
+            let pending_bit = 1u128 << (IRQ_OFFSET + irq);
+            if self.pending & pending_bit == 0 {
+                continue;
+            }
+            if self.enabled & (1u128 << irq) == 0 {
+                continue;
+            }
+
+            let irq_i32 = irq as i32;
+            if !self.is_external_irq_dispatchable(irq_i32, basepri, current_active_prio) {
+                continue;
+            }
+
+            let prio = self.irq_priority_value(irq_i32);
+            let better_tie_break = match best_irq {
+                None => true,
+                Some(existing) => irq_i32 < existing,
+            };
+            if prio < best_prio || (prio == best_prio && better_tie_break) {
+                best_prio = prio;
+                best_irq = Some(irq_i32);
+            }
+        }
+
+        if irq50_pending || irq67_pending {
+            debug!(
+                "NVIC arb basepri={:#04x} active_prio={:?} irq50_pending={} irq50_enabled={} irq50_prio={} irq67_pending={} irq67_enabled={} irq67_prio={} selected={:?}",
+                basepri,
+                current_active_prio,
+                irq50_pending,
+                (self.enabled & (1u128 << 50)) != 0,
+                self.irq_priority_value(50),
+                irq67_pending,
+                (self.enabled & (1u128 << 67)) != 0,
+                self.irq_priority_value(67),
+                best_irq,
+            );
+        }
+
+        if let Some(irq) = best_irq {
+            self.clear_intr_pending(irq);
+            Some(irq)
+        } else {
+            None
+        }
+    }
+
     pub fn get_and_clear_next_intr_pending(&mut self) -> Option<i32> {
         if let Some(bit) = self.next_dispatchable_bit() {
             self.pending &= !(1 << bit);
@@ -130,16 +226,11 @@ impl Nvic {
         primask != 0
     }
 
-    fn basepri_masks_external_interrupts(sys: &System) -> bool {
-        let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap();
-        basepri != 0
-    }
-
     pub fn take_pending_interrupt(&mut self, sys: &System) -> Option<i32> {
         self.maybe_set_systick_intr_pending();
 
         let primask_disabled = Self::are_interrupts_disabled(sys);
-        let basepri_masked = Self::basepri_masks_external_interrupts(sys);
+        let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap() as u32;
         let current_exception = sys.uc.borrow().reg_read(RegisterARM::IPSR).unwrap();
 
         if primask_disabled || current_exception != 0 {
@@ -153,43 +244,20 @@ impl Nvic {
             return None;
         }
 
-        if basepri_masked {
-            let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
-            if self.pending & !sys_pending_mask != 0 {
-                trace!(
-                    "Interrupt dispatch blocked basepri={} pending=0x{:032x}",
-                    sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap(),
-                    self.pending,
-                );
-            }
+        // Keep existing simple system-exception behavior in thread mode.
+        let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
+        let sys_pending = self.pending & sys_pending_mask;
+        if sys_pending != 0 {
+            let bit = sys_pending.trailing_zeros();
+            self.pending &= !(1u128 << bit);
+            return Some((bit as i32) - IRQ_OFFSET);
         }
 
-        // Debug: show BASEPRI and pending set when IRQ 67 is in the queue after a clear-basepri window
-        let irq67_bit = 1u128 << (IRQ_OFFSET + 67);
-        if self.pending & irq67_bit != 0 && !basepri_masked {
-            let basepri_val = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap();
-            debug!("NVIC take_pending: irq67_pending=true basepri={:#04x} next={:?} sys_pending={:#06x}",
-                basepri_val, self.next_pending_intr(), self.pending & ((1u128 << IRQ_OFFSET) - 1));
+        if let Some(irq) = self.take_next_external_irq(basepri, None) {
+            return Some(irq);
         }
 
-        if let Some(irq) = self.get_and_clear_next_intr_pending() {
-            if irq == 67 {
-                let bm = basepri_masked;
-                debug!("NVIC take_pending get_and_clear returned 67 basepri_masked={} → will_return={}", bm, !bm);
-            }
-            if irq >= 0 && basepri_masked {
-                self.set_intr_pending(irq);
-                // Log once when OTG FS IRQ 67 is blocked by BASEPRI -- helps diagnose USB stalls.
-                if irq == 67 {
-                    let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap();
-                    debug!("NVIC IRQ 67 deferred: basepri_masked basepri={:#04x}", basepri);
-                }
-                return None;
-            }
-            Some(irq)
-        } else {
-            None
-        }
+        None
     }
 
     fn read_vector_addr(sys: &System, vector_table_addr: u32, irq: i32) -> u32 {
@@ -409,6 +477,17 @@ impl Peripheral for Nvic {
                 let ext_pending = self.pending >> IRQ_OFFSET;
                 ((ext_pending >> (idx * 32)) & 0xFFFF_FFFF) as u32
             }
+            // IPR0..IPR31 (4 priorities per register)
+            0x0300..=0x037c => {
+                let idx = ((offset - 0x300) / 4) as usize;
+                let base = idx * 4;
+                u32::from_le_bytes([
+                    self.irq_priority[base],
+                    self.irq_priority[base + 1],
+                    self.irq_priority[base + 2],
+                    self.irq_priority[base + 3],
+                ])
+            }
             _ => 0,
         }
     }
@@ -436,6 +515,27 @@ impl Peripheral for Nvic {
             0x0180..=0x018c => {
                 let idx = ((offset - 0x180) / 4) as u32;
                 self.pending &= !((value as u128) << (IRQ_OFFSET as u32 + idx * 32));
+            }
+            // IPR0..IPR31 (4 priorities per register)
+            0x0300..=0x037c => {
+                let idx = ((offset - 0x300) / 4) as usize;
+                let base = idx * 4;
+                let bytes = value.to_le_bytes();
+                self.irq_priority[base] = bytes[0];
+                self.irq_priority[base + 1] = bytes[1];
+                self.irq_priority[base + 2] = bytes[2];
+                self.irq_priority[base + 3] = bytes[3];
+                for lane in 0..4 {
+                    let irq = base + lane;
+                    if irq == 50 || irq == 67 {
+                        info!(
+                            "NVIC IPR write irq={} prio={:#04x} raw={:#010x}",
+                            irq,
+                            self.irq_priority[irq],
+                            value
+                        );
+                    }
+                }
             }
             _ => {}
         }

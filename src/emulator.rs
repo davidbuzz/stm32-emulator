@@ -186,11 +186,25 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             p.step(&sys);
 
             if n % interrupt_period as u64 == 0 {
-                if let Some(irq) = p.nvic.borrow_mut().take_pending_interrupt(&sys) {
+                let pending_irq = {
+                    p.nvic.borrow_mut().take_pending_interrupt(&sys)
+                };
+                if let Some(irq) = pending_irq {
                     if irq == 67 {
                         info!("EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop");
                     }
-                    *deferred_irq.borrow_mut() = Some(irq);
+                    let deferred_was_empty = {
+                        let mut deferred = deferred_irq.borrow_mut();
+                        if deferred.is_none() {
+                            *deferred = Some(irq);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if !deferred_was_empty {
+                        p.nvic.borrow_mut().set_intr_pending(irq);
+                    }
                     CONTINUE_EXECUTION.store(true, Ordering::Release);
                     uc.emu_stop().unwrap();
                     return;
@@ -246,8 +260,22 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     // Return from interrupt
                     let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
                     p.nvic.borrow_mut().return_from_interrupt(&sys);
-                    if let Some(irq) = p.nvic.borrow_mut().take_pending_interrupt(&sys) {
-                        *deferred_irq.borrow_mut() = Some(irq);
+                    let pending_irq = {
+                        p.nvic.borrow_mut().take_pending_interrupt(&sys)
+                    };
+                    if let Some(irq) = pending_irq {
+                        let deferred_was_empty = {
+                            let mut deferred = deferred_irq.borrow_mut();
+                            if deferred.is_none() {
+                                *deferred = Some(irq);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if !deferred_was_empty {
+                            p.nvic.borrow_mut().set_intr_pending(irq);
+                        }
                         CONTINUE_EXECUTION.store(true, Ordering::Release);
                         uc.emu_stop().unwrap();
                     }
@@ -355,7 +383,17 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         };
         pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc");
 
-        if let Some(irq) = deferred_irq.borrow_mut().take() {
+        if let Some(mut irq) = deferred_irq.borrow_mut().take() {
+            let selected_irq = {
+                sys.p.nvic.borrow_mut().take_pending_interrupt(&sys)
+            };
+            if let Some(selected) = selected_irq {
+                if selected != irq {
+                    sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                    irq = selected;
+                }
+            }
+
             if irq == 67 {
                 info!("EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS={})", NUM_INSTRUCTIONS.load(Ordering::Relaxed));
             }
