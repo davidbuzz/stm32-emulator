@@ -44,6 +44,24 @@ impl Dma {
         }
     }
 
+    fn set_htif(&mut self, stream: usize) {
+        let bit = htif_mask(stream);
+        if stream < 4 {
+            self.lisr |= bit;
+        } else {
+            self.hisr |= bit;
+        }
+    }
+
+    fn set_teif(&mut self, stream: usize) {
+        let bit = teif_mask(stream);
+        if stream < 4 {
+            self.lisr |= bit;
+        } else {
+            self.hisr |= bit;
+        }
+    }
+
     fn stream_irq(&self, stream: usize) -> Option<i32> {
         // STM32F427 IRQ numbers for DMA stream interrupts.
         // DMA1 Stream0..6 -> 11..17
@@ -73,14 +91,39 @@ impl Dma {
             }
         }
     }
+
+    fn signal_ht(&mut self, sys: &System, stream_idx: usize) {
+        self.set_htif(stream_idx);
+        if self.streams[stream_idx].htie_enabled() {
+            if let Some(irq) = self.stream_irq(stream_idx) {
+                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+            }
+        }
+    }
+
+    fn signal_te(&mut self, sys: &System, stream_idx: usize) {
+        self.set_teif(stream_idx);
+        if self.streams[stream_idx].teie_enabled() {
+            if let Some(irq) = self.stream_irq(stream_idx) {
+                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+            }
+        }
+    }
 }
 
 impl Peripheral for Dma {
     fn step(&mut self, sys: &System) {
         let name = self.name.clone();
         for i in 0..8 {
-            if self.streams[i].step_deferred(&name, i, sys) {
-                self.signal_tc(sys, i);
+            match self.streams[i].step_deferred(&name, i, sys) {
+                StreamStepResult::Completed { half } => {
+                    if half {
+                        self.signal_ht(sys, i);
+                    }
+                    self.signal_tc(sys, i);
+                }
+                StreamStepResult::TransferError => self.signal_te(sys, i),
+                StreamStepResult::Noop => {}
             }
         }
     }
@@ -104,8 +147,15 @@ impl Peripheral for Dma {
             }
             Access::Reg(_) => {}
             Access::StreamReg(i, offset) => {
-                if self.streams[i].write(&self.name, i, sys, offset, value) {
-                    self.signal_tc(sys, i);
+                match self.streams[i].write(&self.name, i, sys, offset, value) {
+                    StreamWriteResult::Completed { half } => {
+                        if half {
+                            self.signal_ht(sys, i);
+                        }
+                        self.signal_tc(sys, i);
+                    }
+                    StreamWriteResult::TransferError => self.signal_te(sys, i),
+                    StreamWriteResult::Noop => {}
                 }
             }
         }
@@ -129,6 +179,14 @@ struct Stream {
 impl Stream {
     fn tcie_enabled(&self) -> bool {
         self.cr & (1 << 4) != 0
+    }
+
+    fn htie_enabled(&self) -> bool {
+        self.cr & (1 << 3) != 0
+    }
+
+    fn teie_enabled(&self) -> bool {
+        self.cr & (1 << 2) != 0
     }
 
     fn channel(&self) -> u8 {
@@ -202,7 +260,7 @@ impl Stream {
     /// For M2P (Write): NDTR beats, reading msize bytes from memory (MINC), writing psize
     ///   bytes to peripheral (PINC).
     /// For MemCopy: source and destination both increment by msize per beat.
-    fn do_xfer(&self, dma_name: &str, stream_idx: usize, sys: &System) {
+    fn do_xfer(&self, dma_name: &str, stream_idx: usize, sys: &System) -> bool {
         let dir = self.dir();
         let mem_addr = self.data_addr();
         let peri_addr = self.par;
@@ -212,7 +270,7 @@ impl Stream {
         let minc = self.minc();
         let pinc = self.pinc();
 
-        if ndtr == 0 { return; }
+        if ndtr == 0 { return false; }
 
         let peri = Peripherals::get_peripheral(&sys.p.peripherals, peri_addr);
         let peri_desc = sys.p.addr_desc(peri_addr);
@@ -227,8 +285,10 @@ impl Stream {
                 peri_desc,
                 dir
             );
-            return;
+            return false;
         }
+
+        let mut ok = true;
 
         if log::log_enabled!(log::Level::Debug) {
             debug!("{} xfer channel={} peri_{} dir={:?} mem=0x{:08x} ndtr={} psize={} msize={} circ={} minc={} pinc={}",
@@ -276,14 +336,16 @@ impl Stream {
 
                 if minc {
                     // Write sequentially to memory
-                    if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), buf.make_contiguous()) {
+                        if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), buf.make_contiguous()) {
                         warn!("DMA P2M write failed addr=0x{:08x} size={} e={}", mem_addr, mem_total, UniErr(e));
+                            ok = false;
                     }
                 } else {
                     // Fixed memory address: write last psize bytes repeatedly (or just write once for simplicity)
                     let bytes = buf.make_contiguous();
                     if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), &bytes[bytes.len().saturating_sub(msize)..]) {
                         warn!("DMA P2M write (MINC=0) failed addr=0x{:08x} e={}", mem_addr, UniErr(e));
+                        ok = false;
                     }
                 }
             }
@@ -310,6 +372,7 @@ impl Stream {
                 };
 
                 let buf = buf.unwrap_or_else(|| {
+                    ok = false;
                     let mut v = std::collections::VecDeque::new();
                     v.extend(std::iter::repeat(0u8).take(mem_total));
                     v
@@ -325,10 +388,14 @@ impl Stream {
                         let slice = &bytes[beat*psize..(beat*psize+psize).min(bytes.len())];
                         if let Some(p) = peri {
                             p.peripheral.borrow_mut().write_dma(sys, beat_offset, slice.iter().copied().collect());
+                        } else {
+                            ok = false;
                         }
                     }
                 } else if let Some(p) = peri {
                     p.peripheral.borrow_mut().write_dma(sys, peri_offset, buf);
+                } else {
+                    ok = false;
                 }
             }
 
@@ -344,12 +411,17 @@ impl Stream {
                 if let Some(buf) = buf {
                     if let Err(e) = sys.uc.borrow_mut().mem_write(dst.into(), &buf) {
                         warn!("DMA MemCopy write failed dst=0x{:08x} size={} e={}", dst, mem_total, UniErr(e));
+                        ok = false;
                     }
+                } else {
+                    ok = false;
                 }
             }
 
             Dir::Invalid => {}
         }
+
+        ok
     }
 
     pub fn read(&mut self, _name: &str, _sys: &System, offset: u32) -> u32 {
@@ -380,7 +452,7 @@ impl Stream {
         }
     }
 
-    pub fn write(&mut self, dma_name: &str, stream_idx: usize, sys: &System, offset: u32, mut value: u32) -> bool {
+    pub fn write(&mut self, dma_name: &str, stream_idx: usize, sys: &System, offset: u32, mut value: u32) -> StreamWriteResult {
         match offset {
             0x0000 => {
                 self.cr = value;
@@ -390,10 +462,11 @@ impl Stream {
                     if self.is_deferred_usart_rx(sys) {
                         self.deferred_usart_rx = true;
                         self.deferred_since = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
-                        return false;
+                        return StreamWriteResult::Noop;
                     }
 
-                    self.do_xfer(dma_name, stream_idx, sys);
+                    let ok = self.do_xfer(dma_name, stream_idx, sys);
+                    let half = self.ndtr > 1;
 
                     if self.is_double_buffer() {
                         // DBM: toggle CT (bit 19) to switch between M0AR and M1AR, reload NDTR
@@ -407,7 +480,10 @@ impl Stream {
                         self.ndtr = 0;
                         self.next_cr = Some(value);
                     }
-                    return true;
+                    if ok {
+                        return StreamWriteResult::Completed { half };
+                    }
+                    return StreamWriteResult::TransferError;
                 }
             }
             0x0004 => {
@@ -421,7 +497,7 @@ impl Stream {
             _ => {}
         }
 
-        false
+        StreamWriteResult::Noop
     }
 
     fn is_deferred_usart_rx(&self, sys: &System) -> bool {
@@ -429,19 +505,20 @@ impl Stream {
     }
 
     /// Called from Dma::step(). Returns true if a transfer completed and TC should be signaled.
-    fn step_deferred(&mut self, dma_name: &str, stream_idx: usize, sys: &System) -> bool {
+    fn step_deferred(&mut self, dma_name: &str, stream_idx: usize, sys: &System) -> StreamStepResult {
         if !self.deferred_usart_rx || self.cr & 1 == 0 {
-            return false;
+            return StreamStepResult::Noop;
         }
 
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         if now.saturating_sub(self.deferred_since) < USART_RX_IDLE_DISABLE_DELAY {
-            return false;
+            return StreamStepResult::Noop;
         }
 
         // Idle window expired: perform the transfer (reads available bytes from USART ext_device)
         // then decide based on circular mode whether to reload or finish.
-        self.do_xfer(dma_name, stream_idx, sys);
+        let ok = self.do_xfer(dma_name, stream_idx, sys);
+        let half = self.ndtr > 1;
         self.deferred_usart_rx = false;
 
         if self.is_double_buffer() {
@@ -459,8 +536,24 @@ impl Stream {
             self.next_cr = None;
         }
 
-        true
+        if ok {
+            StreamStepResult::Completed { half }
+        } else {
+            StreamStepResult::TransferError
+        }
     }
+}
+
+enum StreamWriteResult {
+    Noop,
+    Completed { half: bool },
+    TransferError,
+}
+
+enum StreamStepResult {
+    Noop,
+    Completed { half: bool },
+    TransferError,
 }
 
 fn is_usart_dr_request(peri_desc: &str) -> bool {
@@ -557,6 +650,26 @@ fn tcif_mask(stream: usize) -> u32 {
         1 => 1 << 11,
         2 => 1 << 21,
         3 => 1 << 27,
+        _ => 0,
+    }
+}
+
+fn htif_mask(stream: usize) -> u32 {
+    match stream % 4 {
+        0 => 1 << 4,
+        1 => 1 << 10,
+        2 => 1 << 20,
+        3 => 1 << 26,
+        _ => 0,
+    }
+}
+
+fn teif_mask(stream: usize) -> u32 {
+    match stream % 4 {
+        0 => 1 << 3,
+        1 => 1 << 9,
+        2 => 1 << 19,
+        3 => 1 << 25,
         _ => 0,
     }
 }

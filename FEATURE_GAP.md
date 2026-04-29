@@ -113,7 +113,7 @@ Work this list top-to-bottom; defer lower tiers until higher tiers are demonstra
 - [x] Circular-mode stream behavior: after `do_xfer`, if CIRC=1 NDTR reloads to `initial_ndtr` and EN stays set; validated on ADC1 DMA2 circular stream.
 - [x] Double-buffer mode (`M0AR`/`M1AR` + `CT`): `is_double_buffer()` checks SxCR bit18; after each completed transfer CT (bit19) is toggled so the hardware pointer alternates between `M0AR` and `M1AR`; `initial_ndtr` is reloaded; implies CIRC semantics.
 - [ ] HIGH PRIORITY: Implement FIFO/direct-mode behavior and threshold semantics (`DMA_SxFCR`) per AN4031 FIFO section.
-- [ ] HIGH PRIORITY: Implement DMA interrupt signaling into NVIC for all relevant classes (`TC`, `HT`, `TE`, `DME`, `FE`) plus matching status-bit visibility in `LISR/HISR`.
+- [ ] HIGH PRIORITY: Implement DMA interrupt signaling into NVIC for all relevant classes (`TC`, `HT`, `TE`, `DME`, `FE`) plus matching status-bit visibility in `LISR/HISR`. `TC` existed previously; `HT`/`TE` status+IRQ wiring are now present, but `DME`/`FE` classes remain unimplemented.
 - [ ] HIGH PRIORITY: Implement channel/request conflict handling and request arbitration when multiple enabled streams target the same peripheral request.
 - [ ] HIGH PRIORITY: Implement stream priority/arbitration semantics instead of treating all streams as immediate and conflict-free.
 - [ ] HIGH PRIORITY: Implement STM32F4-accurate disable/re-enable sequencing for `EN` clear/set behavior instead of treating enable as an immediate fire-and-forget trigger.
