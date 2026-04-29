@@ -13,8 +13,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ext_devices::{ExtDevices, ExtDevice};
-use crate::system::System;
 use super::Peripheral;
+
+use crate::system::System;
+const USART_SR_TC: u32 = 1 << 6;
+const USART_SR_TXE: u32 = 1 << 7;
 
 #[derive(Default)]
 pub struct Usart {
@@ -76,8 +79,9 @@ impl Peripheral for Usart {
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
         match offset {
             0x0000 => {
-                // SR is mostly status/RWC; preserve existing bits for now.
-                self.sr = value;
+                // TXE/TC are transmitter state bits; keep them asserted in this minimal model
+                // instead of letting firmware clear them permanently through SR writes.
+                self.sr = (value & !(USART_SR_TXE | USART_SR_TC)) | USART_SR_TXE | USART_SR_TC;
             }
             0x0004 => {
                 // DR register
@@ -87,7 +91,7 @@ impl Peripheral for Usart {
                 );
 
                 // TX is complete immediately in this minimal model.
-                self.sr |= (1 << 7) | (1 << 6);
+                self.sr |= USART_SR_TXE | USART_SR_TC;
 
                 trace!("{} write={:02x}", self.name, value as u8);
             }
