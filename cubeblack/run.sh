@@ -3,18 +3,34 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOG_FILE="$ROOT_DIR/cubeblack/ardu.cubeblack.log"
+TIME_FORMAT='real=%e user=%U sys=%S maxrss=%M exit=%x'
+
+if [[ $# -gt 0 ]]; then
+	run_args=("$@")
+else
+	run_args=(config.yaml -v --max-instructions 120000000)
+fi
 
 if [[ -f "$HOME/.cargo/env" ]]; then
 	# shellcheck disable=SC1090
 	source "$HOME/.cargo/env"
 fi
 
-if command -v cargo >/dev/null 2>&1; then
-	cargo run --release -- config.yaml -v
-elif [[ -x "$ROOT_DIR/target/release/stm32-emulator" ]]; then
-	"$ROOT_DIR/target/release/stm32-emulator" config.yaml -v
+if [[ -x "$ROOT_DIR/target/release/stm32-emulator" ]]; then
+	emulator_cmd=("$ROOT_DIR/target/release/stm32-emulator" "${run_args[@]}")
+elif command -v cargo >/dev/null 2>&1; then
+	emulator_cmd=(cargo run --release -- "${run_args[@]}")
 else
 	echo "error: neither cargo nor $ROOT_DIR/target/release/stm32-emulator is available" >&2
 	echo "hint: run $ROOT_DIR/DEV_SETUP_UBUNTU.sh first" >&2
 	exit 1
+fi
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+if command -v /usr/bin/time >/dev/null 2>&1; then
+	/usr/bin/time -f "$TIME_FORMAT" timeout 120 "${emulator_cmd[@]}" 2>&1 | tee "$LOG_FILE"
+else
+	timeout 120 "${emulator_cmd[@]}" 2>&1 | tee "$LOG_FILE"
 fi

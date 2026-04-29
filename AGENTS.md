@@ -36,8 +36,12 @@ Repository guidance for AI coding agents working in this project.
 - Run CubeBlack directly:
   - cd cubeblack
   - ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+- Run CubeBlack long validation and capture evidence log:
+  - cd cubeblack
+  - /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000 2>&1 | tee ardu.cubeblack.log
 - Detect tight loops:
   - ../target/release/stm32-emulator config.yaml -v --busy-loop-stop
+- `cubeblack/run.sh` should remain aligned with the long validation command above and must refresh `cubeblack/ardu.cubeblack.log` on each long-run execution.
 
 ## Execution budgeting
 
@@ -53,8 +57,10 @@ Repository guidance for AI coding agents working in this project.
   - `--busy-loop-stop` and other open-ended probes: always wrap in `timeout 30` unless there is a specific reason not to
 - Recommended command forms:
   - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000`
-  - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000`
+  - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000 2>&1 | tee ardu.cubeblack.log`
   - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop`
+- The long validation run is expected to leave behind `cubeblack/ardu.cubeblack.log` as the evidence artifact for that checkpoint.
+- Commit updated `cubeblack/ardu.cubeblack.log` regularly alongside meaningful emulator progress so git history preserves the observed runtime evidence over time.
 
 ## Boot-debug workflow
 
@@ -131,6 +137,7 @@ If you also intend to refresh the bootloader image used by the emulator, copy `b
 - After each meaningful change:
   - run a short bounded test (for fast feedback)
   - run a longer stability test (to confirm no regression)
+- Capture the longer stability test output into `cubeblack/ardu.cubeblack.log` and keep that file current in git as evidence of the latest long-run result.
 - Report:
   - command used
   - final instruction count or stop reason

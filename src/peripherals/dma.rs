@@ -11,8 +11,11 @@
 
 use crate::util::UniErr;
 use crate::system::System;
+use crate::emulator::NUM_INSTRUCTIONS;
 use super::Peripheral;
 use super::Peripherals;
+
+const USART_RX_IDLE_DISABLE_DELAY: u64 = 20_000;
 
 #[derive(Default)]
 pub struct Dma {
@@ -64,6 +67,12 @@ impl Dma {
 }
 
 impl Peripheral for Dma {
+    fn step(&mut self, _sys: &System) {
+        for stream in &mut self.streams {
+            stream.step_idle_usart_rx();
+        }
+    }
+
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
         match Access::from_offset(offset) {
             Access::Reg(Reg::Lisr) => self.lisr,
@@ -106,6 +115,8 @@ struct Stream {
     pub m0ar: u32,
     pub m1ar: u32,
     pub fcr: u32,
+    deferred_usart_rx: bool,
+    deferred_since: u64,
 }
 
 impl Stream {
@@ -241,9 +252,16 @@ impl Stream {
         match offset {
             0x0000 => {
                 self.cr = value;
+                self.deferred_usart_rx = false;
 
                 // CRx register
                 if value & 1 != 0 {
+                    if self.is_deferred_usart_rx(sys) {
+                        self.deferred_usart_rx = true;
+                        self.deferred_since = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+                        return false;
+                    }
+
                     // Enable is on. do the transfer.
                     self.do_xfer(name, sys);
 
@@ -263,6 +281,29 @@ impl Stream {
 
         false
     }
+
+    fn is_deferred_usart_rx(&self, sys: &System) -> bool {
+        self.dir() == Dir::Read && is_usart_dr_request(&sys.p.addr_desc(self.par))
+    }
+
+    fn step_idle_usart_rx(&mut self) {
+        if !self.deferred_usart_rx || self.cr & 1 == 0 {
+            return;
+        }
+
+        let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+        if now.saturating_sub(self.deferred_since) < USART_RX_IDLE_DISABLE_DELAY {
+            return;
+        }
+
+        self.cr &= !1;
+        self.next_cr = None;
+        self.deferred_usart_rx = false;
+    }
+}
+
+fn is_usart_dr_request(peri_desc: &str) -> bool {
+    (peri_desc.contains("peri=USART") || peri_desc.contains("peri=UART")) && peri_desc.contains("reg=DR")
 }
 
 #[derive(Debug, PartialEq, Eq)]
