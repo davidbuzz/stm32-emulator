@@ -26,6 +26,7 @@ pub mod core_debug;
 pub mod sw_spi;
 pub mod sdio;
 pub mod tim;
+pub mod exti;
 
 use rcc::*;
 use pwr::*;
@@ -45,6 +46,7 @@ use scb::*;
 use core_debug::*;
 use sw_spi::*;
 use tim::*;
+use exti::*;
 
 use std::{collections::{BTreeMap, VecDeque, HashMap}, cell::RefCell};
 use svd_parser::svd::{RegisterInfo, Device as SvdDevice};
@@ -108,6 +110,7 @@ impl Peripherals {
             .or_else(||         Dma::new(&name))
             .or_else(||       OtgFs::new(&name))
             .or_else(||         Tim::new(&name))
+            .or_else(||        Exti::new(&name))
             .or_else(||         Spi::new(&name, ext_devices))
             .or_else(||        Sdio::new(&name))
         ;

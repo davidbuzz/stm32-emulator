@@ -10204,6 +10204,6 @@
 [clk=44366114 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 50 vector=0x815c389
 [clk=44366293 pc=0x0815c98e] DEBUG TIM5 write CCR1=0x00080a25 (cnt=0x00080a1c)
 [clk=44367038 pc=0x08154ca4] DEBUG TIM5 CC1 compare fired cnt=0x00080a25 ccr1=0x00080a25 -> IRQ 50
-[clk=200000000 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 50 vector=0x815c389
-[clk=200000000 pc=0x0815ca54] INFO  Reached target number of instructions. Done
-real=117.39 user=109.17 sys=7.83 maxrss=88928 exit=0
+[clk=120000000 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 50 vector=0x815c389
+[clk=120000000 pc=0x0815ca54] INFO  Reached target number of instructions. Done
+real=68.27 user=62.85 sys=5.14 maxrss=88816 exit=0

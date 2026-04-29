@@ -39,7 +39,11 @@ impl Flash {
 impl Peripheral for Flash {
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match offset {
-            0x00 => self.acr,
+            0x00 => {
+                // PRFTBS (bit 5) mirrors PRFTBE (bit 4): if prefetch is enabled it reflects as status.
+                let prftbs = if (self.acr & (1 << 4)) != 0 { 1 << 5 } else { 0 };
+                (self.acr & !(1 << 5)) | prftbs
+            },
             0x04 => self.keyr,
             0x08 => self.optkeyr,
             0x0c => self.sr,
