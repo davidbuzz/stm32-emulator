@@ -1,0 +1,40 @@
+arducopter.gdb.log
+
+./run_gdb.sh 
+Starting emulator on GDB port 3333 ...
+[clk=00000000 pc=0x00000000] DEBUG Mapping region start=0x00000000 len=0x1000 name=NULL_forgiveness
+[clk=00000000 pc=0x00000000] DEBUG Mapping region start=0x08000000 len=0x4000 name=BL
+[clk=00000000 pc=0x00000000] INFO  Loading file=CubeBlack_bl.bin at base=0x08000000
+[clk=00000000 pc=0x00000000] DEBUG Mapping region start=0x08004000 len=0x1fc000 name=ROM
+[clk=00000000 pc=0x00000000] INFO  Loading file=arducopter.bin at base=0x08004000
+[clk=00000000 pc=0x00000000] DEBUG Mapping region start=0x10000000 len=0x10000 name=RAM-CCM
+[clk=00000000 pc=0x00000000] DEBUG Mapping region start=0x1fff0000 len=0x10000 name=SYSMEM
+[clk=00000000 pc=0x00000000] DEBUG Mapping region start=0x20000000 len=0x30000 name=RAM
+[clk=00000000 pc=0x00000000] INFO  GDB mode: emulator paused at reset vector 0x08005315
+[clk=00000000 pc=0x00000000] INFO  GDB: waiting for connection on 0.0.0.0:3333
+Connecting arm-none-eabi-gdb to localhost:3333 ...
+GNU gdb (GNU Arm Embedded Toolchain 10-2020-q4-major) 10.1.90.20201028-git
+Copyright (C) 2020 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Type "show copying" and "show warranty" for details.
+This GDB was configured as "--host=x86_64-linux-gnu --target=arm-none-eabi".
+Type "show configuration" for configuration details.
+For bug reporting instructions, please see:
+<https://www.gnu.org/software/gdb/bugs/>.
+Find the GDB manual and other documentation resources online at:
+    <http://www.gnu.org/software/gdb/documentation/>.
+
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from /home/buzz/stm32-emulator/modules/ardupilot/build/CubeBlack/bin/arducopter...
+The target architecture is set to "armv7e-m".
+Remote debugging using localhost:3333
+[clk=00000000 pc=0x00000000] INFO  GDB: debugger connected from 127.0.0.1:60148
+[clk=00000000 pc=0x00000000] INFO  Unknown command: Ok("vMustReplyEmpty")
+[clk=00000000 pc=0x00000000] INFO  Unknown command: Ok("qTStatus")
+[clk=00000000 pc=0x00000000] INFO  Unknown command: Ok("qOffsets")
+0x00000000 in ?? ()
+[clk=00000000 pc=0x00000000] INFO  Unknown command: Ok("qSymbol::")
+(gdb) 

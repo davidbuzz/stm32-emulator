@@ -10,7 +10,8 @@
       "Bash(../target/release/stm32-emulator config.yaml -v --busy-loop-stop)",
       "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 30000000)",
       "Bash(*)",
-      "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 50000000)"
+      "Bash(../target/release/stm32-emulator config.yaml -v --max-instructions 50000000)",
+      "Read(//media/buzz/31d063fd-9661-4765-a331-2b272e68359f/home/buzz2/stm32-emulator/mips-emu-gdb-example/**)"
     ]
   }
 }
