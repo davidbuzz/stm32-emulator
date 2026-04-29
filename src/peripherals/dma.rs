@@ -147,12 +147,17 @@ impl Dma {
         }
     }
 
-    fn has_request_conflict(&self, stream_idx: usize, channel: u8, par: u32) -> bool {
-        self.streams.iter().enumerate().any(|(idx, s)| {
-            idx != stream_idx
+    fn find_request_conflict(&self, stream_idx: usize, channel: u8, par: u32) -> Option<usize> {
+        self.streams.iter().enumerate().find_map(|(idx, s)| {
+            if idx != stream_idx
                 && (s.cr & 1) != 0
                 && s.channel() == channel
                 && s.par == par
+            {
+                Some(idx)
+            } else {
+                None
+            }
         })
     }
 }
@@ -202,20 +207,40 @@ impl Peripheral for Dma {
                 if offset == 0x0000 && (value & 1) != 0 {
                     let channel = ((value >> 25) & 0b111) as u8;
                     let par = self.streams[i].par;
-                    if self.has_request_conflict(i, channel, par) {
-                        self.signal_te(sys, i);
-                        self.signal_dme(sys, i);
-                        if self.streams[i].fifo_enabled() {
-                            self.signal_fe(sys, i);
+                    if let Some(owner) = self.find_request_conflict(i, channel, par) {
+                        let new_pl = ((value >> 16) & 0b11) as u8;
+                        let owner_pl = self.streams[owner].priority();
+
+                        if new_pl > owner_pl {
+                            self.streams[owner].cr &= !1;
+                            self.streams[owner].deferred_usart_rx = false;
+                            warn!(
+                                "{} stream={} preempted stream={} on conflicting request channel={} par=0x{:08x} (pl {} > {})",
+                                self.name,
+                                i,
+                                owner,
+                                channel,
+                                par,
+                                new_pl,
+                                owner_pl
+                            );
+                        } else {
+                            self.signal_te(sys, i);
+                            self.signal_dme(sys, i);
+                            if self.streams[i].fifo_enabled() {
+                                self.signal_fe(sys, i);
+                            }
+                            warn!(
+                                "{} stream={} blocked conflicting request channel={} par=0x{:08x} (pl {} <= {})",
+                                self.name,
+                                i,
+                                channel,
+                                par,
+                                new_pl,
+                                owner_pl
+                            );
+                            return;
                         }
-                        warn!(
-                            "{} stream={} blocked conflicting request channel={} par=0x{:08x}",
-                            self.name,
-                            i,
-                            channel,
-                            par
-                        );
-                        return;
                     }
                 }
 
@@ -281,6 +306,10 @@ impl Stream {
 
     fn channel(&self) -> u8 {
         ((self.cr >> 25) & 0b111) as u8
+    }
+
+    fn priority(&self) -> u8 {
+        ((self.cr >> 16) & 0b11) as u8
     }
 
     fn dir(&self) -> Dir {
