@@ -1,1 +1,10 @@
 /target
+
+# Reference clones (read-only, not submodules)
+modules/renode/
+modules/stm32-emulator-renode/
+modules/stm32-renode-inpyjama/
+modules/fork-goran-mahovlic/
+modules/fork-AZhurGIT/
+modules/fork-wawa19933/
+modules/fork-SINTEF/
