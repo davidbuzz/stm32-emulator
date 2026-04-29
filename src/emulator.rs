@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{mem::MaybeUninit, sync::atomic::{AtomicU64, Ordering, AtomicBool}, cell::RefCell};
+use std::{mem::MaybeUninit, sync::atomic::{AtomicU64, Ordering, AtomicBool}, cell::RefCell, rc::Rc};
 use svd_parser::svd::Device as SvdDevice;
 use unicorn_engine::{unicorn_const::{Arch, Mode, HookType, MemType}, Unicorn, RegisterARM};
 use crate::{config::Config, util::UniErr, Args, system::System, framebuffers::sdl_engine::{PUMP_EVENT_INST_INTERVAL, SDL}};
@@ -72,6 +72,27 @@ pub fn dump_stack(uc: &mut Unicorn<()>, count: usize) {
     }
 }
 
+pub fn dump_stack_from(uc: &mut Unicorn<()>, mut sp: u64, count: usize, label: &str) {
+    info!("{} stack dump starting at sp=0x{:08x}", label, sp);
+
+    for _ in 0..count {
+        let mut v = [0, 0, 0, 0];
+        if uc.mem_read(sp, &mut v).is_err() {
+            info!("{} stack dump finished due to mem read error", label);
+            return;
+        }
+        let v = u32::from_le_bytes(v);
+
+        if (0x0800_0000..0x0818_0000).contains(&v) {
+            info!("{} *** 0x{:08x} (sp=0x{:08x})", label, v, sp);
+        } else {
+            info!("{}     0x{:08x} (sp=0x{:08x})", label, v, sp);
+        }
+
+        sp += 4;
+    }
+}
+
 pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result<()> {
     let mut uc = Unicorn::new(Arch::ARM, Mode::MCLASS | Mode::LITTLE_ENDIAN)
         .map_err(UniErr).context("Failed to initialize Unicorn instance")?;
@@ -89,12 +110,14 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
 
     // We hook on each instructions, but we could skip this.
     // The slowdown is less than 50%. It's okay for now.
+    let deferred_irq = Rc::new(RefCell::new(None::<i32>));
     {
         let trace_instructions = crate::verbose() >= 4;
         let busy_loop_stop = args.busy_loop_stop;
         let p = sys.p.clone();
         let d = sys.d.clone();
         let interrupt_period = args.interrupt_period;
+        let deferred_irq = deferred_irq.clone();
         sys.uc.borrow_mut().add_code_hook(0, u64::MAX, move |uc, pc, size| {
             unsafe {
                 if busy_loop_stop && LAST_INSTRUCTION.0 == pc as u32 {
@@ -163,7 +186,12 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             p.step(&sys);
 
             if n % interrupt_period as u64 == 0 {
-                p.nvic.borrow_mut().run_pending_interrupts(&sys);
+                if let Some(irq) = p.nvic.borrow_mut().take_pending_interrupt(&sys) {
+                    *deferred_irq.borrow_mut() = Some(irq);
+                    CONTINUE_EXECUTION.store(true, Ordering::Release);
+                    uc.emu_stop().unwrap();
+                    return;
+                }
             }
 
             if n & PUMP_EVENT_INST_INTERVAL == 0 {
@@ -181,6 +209,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
     {
         let p = sys.p.clone();
         let d = sys.d.clone();
+        let deferred_irq = deferred_irq.clone();
         sys.uc.borrow_mut().add_intr_hook(move |uc, exception| {
             match exception {
                 /*
@@ -214,7 +243,11 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     // Return from interrupt
                     let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
                     p.nvic.borrow_mut().return_from_interrupt(&sys);
-                    p.nvic.borrow_mut().run_pending_interrupts(&sys);
+                    if let Some(irq) = p.nvic.borrow_mut().take_pending_interrupt(&sys) {
+                        *deferred_irq.borrow_mut() = Some(irq);
+                        CONTINUE_EXECUTION.store(true, Ordering::Release);
+                        uc.emu_stop().unwrap();
+                    }
                 }
                 3 | 4 => {
                     // EXCP_PREFETCH_ABORT (3) or EXCP_DATA_ABORT (4): fatal fault in emulated CPU.
@@ -223,10 +256,30 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     // pc=0x55555554 means stack overflow (ChibiOS fill pattern 0x55555555 loaded as PC).
                     let pc = uc.reg_read(unicorn_engine::RegisterARM::PC).unwrap_or(0);
                     let sp = uc.reg_read(unicorn_engine::RegisterARM::SP).unwrap_or(0);
+                    let msp = uc.reg_read(unicorn_engine::RegisterARM::MSP).unwrap_or(0);
+                    let psp = uc.reg_read(unicorn_engine::RegisterARM::PSP).unwrap_or(0);
                     let lr = uc.reg_read(unicorn_engine::RegisterARM::LR).unwrap_or(0);
                     let r0 = uc.reg_read(unicorn_engine::RegisterARM::R0).unwrap_or(0);
-                    error!("intr_hook intno={:08x} (fatal fault) pc=0x{:08x} sp=0x{:08x} lr=0x{:08x} r0=0x{:08x}",
-                        exception, pc, sp, lr, r0);
+                    let r1 = uc.reg_read(unicorn_engine::RegisterARM::R1).unwrap_or(0);
+                    let r2 = uc.reg_read(unicorn_engine::RegisterARM::R2).unwrap_or(0);
+                    let r3 = uc.reg_read(unicorn_engine::RegisterARM::R3).unwrap_or(0);
+                    let r12 = uc.reg_read(unicorn_engine::RegisterARM::R12).unwrap_or(0);
+                    let primask = uc.reg_read(unicorn_engine::RegisterARM::PRIMASK).unwrap_or(0);
+                    let basepri = uc.reg_read(unicorn_engine::RegisterARM::BASEPRI).unwrap_or(0);
+                    let faultmask = uc.reg_read(unicorn_engine::RegisterARM::FAULTMASK).unwrap_or(0);
+                    let control = uc.reg_read(unicorn_engine::RegisterARM::CONTROL).unwrap_or(0);
+                    let ipsr = uc.reg_read(unicorn_engine::RegisterARM::IPSR).unwrap_or(0);
+                    error!(
+                        "intr_hook intno={:08x} (fatal fault) pc=0x{:08x} sp=0x{:08x} msp=0x{:08x} psp=0x{:08x} lr=0x{:08x} r0=0x{:08x} r1=0x{:08x} r2=0x{:08x} r3=0x{:08x} r12=0x{:08x} primask=0x{:08x} basepri=0x{:08x} faultmask=0x{:08x} control=0x{:08x} ipsr=0x{:08x}",
+                        exception, pc, sp, msp, psp, lr, r0, r1, r2, r3, r12, primask, basepri, faultmask, control, ipsr
+                    );
+                    dump_stack_from(uc, sp, 24, "active");
+                    if msp != sp {
+                        dump_stack_from(uc, msp, 24, "msp");
+                    }
+                    if psp != sp && psp != msp {
+                        dump_stack_from(uc, psp, 24, "psp");
+                    }
                     if pc == 0x55555554 {
                         error!("Stack overflow detected (ChibiOS fill pattern at PC). Thread stack exhausted.");
                     }
@@ -240,7 +293,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         }).expect("add_intr_hook failed");
     }
 
-    uc.add_mem_hook(HookType::MEM_UNMAPPED, 0, u64::MAX, |uc, type_, addr, size, value| {
+    sys.uc.borrow_mut().add_mem_hook(HookType::MEM_UNMAPPED, 0, u64::MAX, |uc, type_, addr, size, value| {
         if type_ == MemType::WRITE_UNMAPPED {
             warn!("{:?} addr=0x{:08x} size={} value=0x{:08x}", type_, addr, size, value);
         } else {
@@ -271,9 +324,9 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         false
     }).expect("add_mem_hook failed");
 
-    let vector_table = VectorTable::from_memory(&uc, vector_table_addr)?;
+    let vector_table = VectorTable::from_memory(&sys.uc.borrow(), vector_table_addr)?;
     let mut pc = vector_table.reset as u64;
-    uc.reg_write(RegisterARM::SP, vector_table.sp.into()).map_err(UniErr)?;
+    sys.uc.borrow_mut().reg_write(RegisterARM::SP, vector_table.sp.into()).map_err(UniErr)?;
     //uc.reg_write(RegisterARM::LR, 0xFFFF_FFFF).map_err(UniErr)?;
 
     info!("Starting emulation");
@@ -288,13 +341,29 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             break;
         }
 
-        let result = uc.emu_start(
-            pc,
-            args.stop_addr.unwrap_or(0) as u64,
-            0,
-            max_instructions.unwrap_or(0) as usize,
-        ).map_err(UniErr);
-        pc = uc.reg_read(RegisterARM::PC).expect("failed to get pc");
+        let result = {
+            let mut uc = sys.uc.borrow_mut();
+            uc.emu_start(
+                pc,
+                args.stop_addr.unwrap_or(0) as u64,
+                0,
+                max_instructions.unwrap_or(0) as usize,
+            ).map_err(UniErr)
+        };
+        pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc");
+
+        if let Some(irq) = deferred_irq.borrow_mut().take() {
+            sys.p.nvic.borrow_mut().run_interrupt(&sys, irq);
+            pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc after deferred irq");
+        }
+
+        if CONTINUE_EXECUTION.swap(false, Ordering::AcqRel) {
+            if crate::verbose() >= 3 {
+                trace!("Resuming execution pc={:08x}", pc);
+            }
+            pc = thumb(pc);
+            continue;
+        }
 
         if STOP_REQUESTED.load(Ordering::Relaxed) {
             info!("Stop requested");
@@ -302,16 +371,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         }
 
         if let Err(e) = result {
-            if CONTINUE_EXECUTION.swap(false, Ordering::AcqRel) {
-                // This was a bad memory access, we keep going.
-                if crate::verbose() >= 3 {
-                    trace!("Resuming execution pc={:08x}", pc);
-                }
-                pc = thumb(pc);
-                continue;
-            } else {
-                bail!(e);
-            }
+            bail!(e);
         }
 
         if args.stop_addr == Some(pc as u32) {
@@ -325,7 +385,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
     }
 
     if let Some(n) = args.dump_stack {
-        dump_stack(&mut uc, n);
+        dump_stack(&mut sys.uc.borrow_mut(), n);
     }
 
     for fb in framebuffers.images {

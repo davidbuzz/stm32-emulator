@@ -83,6 +83,10 @@ impl Rcc {
         const HSERDY: u32 = 1 << 17;
         const PLLON: u32 = 1 << 24;
         const PLLRDY: u32 = 1 << 25;
+        const PLLI2SON: u32 = 1 << 26;
+        const PLLI2SRDY: u32 = 1 << 27;
+        const PLLSAION: u32 = 1 << 28;
+        const PLLSAIRDY: u32 = 1 << 29;
 
         if self.cr & HSION != 0 {
             self.cr |= HSIRDY;
@@ -100,6 +104,18 @@ impl Rcc {
             self.cr |= PLLRDY;
         } else {
             self.cr &= !PLLRDY;
+        }
+
+        if self.cr & PLLI2SON != 0 {
+            self.cr |= PLLI2SRDY;
+        } else {
+            self.cr &= !PLLI2SRDY;
+        }
+
+        if self.cr & PLLSAION != 0 {
+            self.cr |= PLLSAIRDY;
+        } else {
+            self.cr &= !PLLSAIRDY;
         }
     }
 
@@ -120,15 +136,32 @@ impl Rcc {
             self.csr &= !LSIRDY;
         }
     }
+
+    fn update_bdcr_ready_bits(&mut self) {
+        const LSEON: u32 = 1 << 0;
+        const LSERDY: u32 = 1 << 1;
+
+        if self.bdcr & LSEON != 0 {
+            self.bdcr |= LSERDY;
+        } else {
+            self.bdcr &= !LSERDY;
+        }
+    }
 }
 
 
 impl Peripheral for Rcc {
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match offset {
-            0x0000 => self.cr,
+            0x0000 => {
+                self.update_cr_ready_bits();
+                self.cr
+            }
             0x0004 => self.pllcfgr,
-            0x0008 => self.cfgr,
+            0x0008 => {
+                self.update_cfgr_status_bits();
+                self.cfgr
+            }
             0x000c => self.cir,
             0x0010 => self.ahb1rstr,
             0x0014 => self.ahb2rstr,
@@ -145,7 +178,10 @@ impl Peripheral for Rcc {
             0x0058 => self.ahb3lpenr,
             0x0060 => self.apb1lpenr,
             0x0064 => self.apb2lpenr,
-            0x0070 => self.bdcr,
+            0x0070 => {
+                self.update_bdcr_ready_bits();
+                self.bdcr
+            }
             0x0074 => {
                 self.update_csr_ready_bits();
                 self.csr
@@ -185,7 +221,14 @@ impl Peripheral for Rcc {
             0x0058 => self.ahb3lpenr = value,
             0x0060 => self.apb1lpenr = value,
             0x0064 => self.apb2lpenr = value,
-            0x0070 => self.bdcr = value,
+            0x0070 => {
+                const BDRST: u32 = 1 << 16;
+                self.bdcr = value;
+                if self.bdcr & BDRST != 0 {
+                    self.bdcr = BDRST;
+                }
+                self.update_bdcr_ready_bits();
+            }
             0x0074 => {
                 self.csr = value;
                 self.update_csr_ready_bits();

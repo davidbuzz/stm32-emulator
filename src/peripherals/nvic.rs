@@ -26,6 +26,8 @@ pub struct Nvic {
     pending: u128,
     enabled: u128,
     active_exceptions: u32,
+    exc_return_stack: Vec<u32>,
+    exc_stack_state: Vec<(u64, i32)>,
 }
 
 const IRQ_OFFSET: i32 = 16;
@@ -133,20 +135,22 @@ impl Nvic {
         basepri != 0
     }
 
-    pub fn run_pending_interrupts(&mut self, sys: &System) {
+    pub fn take_pending_interrupt(&mut self, sys: &System) -> Option<i32> {
         self.maybe_set_systick_intr_pending();
 
         let primask_disabled = Self::are_interrupts_disabled(sys);
         let basepri_masked = Self::basepri_masks_external_interrupts(sys);
+        let current_exception = sys.uc.borrow().reg_read(RegisterARM::IPSR).unwrap();
 
-        if primask_disabled || self.active_exceptions > 0 {
+        if primask_disabled || current_exception != 0 {
             trace!(
-                "Interrupt dispatch blocked primask={} active_exceptions={} pending=0x{:032x}",
+                "Interrupt dispatch blocked primask={} ipsr={} active_exceptions={} pending=0x{:032x}",
                 sys.uc.borrow().reg_read(RegisterARM::PRIMASK).unwrap(),
+                current_exception,
                 self.active_exceptions,
                 self.pending
             );
-            return;
+            return None;
         }
 
         if basepri_masked {
@@ -163,9 +167,11 @@ impl Nvic {
         if let Some(irq) = self.get_and_clear_next_intr_pending() {
             if irq >= 0 && basepri_masked {
                 self.set_intr_pending(irq);
-                return;
+                return None;
             }
-            self.run_interrupt(sys, irq);
+            Some(irq)
+        } else {
+            None
         }
     }
 
@@ -188,6 +194,7 @@ impl Nvic {
         let vector = Self::read_vector_addr(sys, self.vector_table_addr, irq);
 
         let mut uc = sys.uc.borrow_mut();
+        let entry_msp = uc.reg_read(RegisterARM::MSP).unwrap();
 
         // SPSEL, bit[1], 0 means we use MSP, 1 means we use PSP.
         // FPCA, bit[2], if the processor includes the FP extension.
@@ -199,7 +206,7 @@ impl Nvic {
         } else {
             control_reg & (1 << 1) != 0
         };
-        let fpca = control_reg & (2 << 1) != 0;
+        let fpca = false;
         trace!("Running interrupt irq={} spsel={} fpca={} vector={:#08x}",
             irq, spsel, fpca, vector);
 
@@ -223,36 +230,65 @@ impl Nvic {
         uc.reg_write(RegisterARM::IPSR, exception_number).unwrap();
         uc.reg_write(RegisterARM::PC, vector as u64).unwrap();
 
+        self.exc_return_stack.push(lr);
+        self.exc_stack_state.push((entry_msp, irq));
         self.active_exceptions = self.active_exceptions.saturating_add(1);
     }
 
     pub fn return_from_interrupt(&mut self, sys: &System) {
         let mut uc = sys.uc.borrow_mut();
-
-        let lr = uc.reg_read(RegisterARM::LR).unwrap();
+        let live_lr = uc.reg_read(RegisterARM::LR).unwrap() as u32;
+        let lr = self.exc_return_stack.pop().unwrap_or(live_lr) as u64;
+        let (entry_msp, entry_irq) = self
+            .exc_stack_state
+            .pop()
+            .unwrap_or((uc.reg_read(RegisterARM::MSP).unwrap(), -999));
+        let restored_xpsr;
         if lr & 0xFFFF_FF00 == 0xFFFF_FF00 {
             let spsel = lr & 0b0000_0100 != 0;
-            let fpca = lr & 0b0001_0000 == 0; // 0 means yes here
+            let fpca = false;
 
             Self::pop_regs(&mut uc, spsel, fpca);
+            restored_xpsr = uc.reg_read(RegisterARM::XPSR).unwrap() as u32;
 
             trace!("Return from interrupt spsel={} fpca={} pc=0x{:08x}",
                 spsel, fpca, uc.reg_read(RegisterARM::PC).unwrap());
 
             // SPSEL, bit[1], 0 means we use MSP, 1 means we use PSP.
             // FPCA, bit[2], if the processor includes the FP extension.
-            let mut control_reg = 0;
+            let mut control_reg = uc.reg_read(RegisterARM::CONTROL).unwrap() as u32 & 0x1;
             if spsel { control_reg |= 1 << 1; }
             if fpca { control_reg |= 2 << 1; }
-            uc.reg_write(RegisterARM::CONTROL, control_reg).unwrap();
+            uc.reg_write(RegisterARM::CONTROL, control_reg.into()).unwrap();
         } else {
             let control_reg = uc.reg_read(RegisterARM::CONTROL).unwrap();
             let spsel = control_reg & (1 << 1) != 0;
-            let fpca = control_reg & (2 << 1) != 0;
+            let fpca = false;
             Self::pop_regs(&mut uc, spsel, fpca);
+            restored_xpsr = uc.reg_read(RegisterARM::XPSR).unwrap() as u32;
 
-            trace!("Return from interrupt spsel={} fpca={} pc=0x{:08x} -- LR was not right",
-                spsel, fpca, uc.reg_read(RegisterARM::PC).unwrap());
+            trace!(
+                "Return from interrupt spsel={} fpca={} pc=0x{:08x} -- saved LR unavailable live_lr=0x{:08x}",
+                spsel,
+                fpca,
+                uc.reg_read(RegisterARM::PC).unwrap(),
+                live_lr
+            );
+        }
+
+        let restored_ipsr = restored_xpsr & 0x1ff;
+        uc.reg_write(RegisterARM::IPSR, restored_ipsr as u64).unwrap();
+
+        let current_msp = uc.reg_read(RegisterARM::MSP).unwrap();
+        if current_msp != entry_msp {
+            warn!(
+                "Exception return MSP mismatch irq={} lr=0x{:08x} msp 0x{:08x}->0x{:08x}; restoring saved MSP",
+                entry_irq,
+                lr as u32,
+                entry_msp,
+                current_msp,
+            );
+            uc.reg_write(RegisterARM::MSP, entry_msp).unwrap();
         }
 
         self.active_exceptions = self.active_exceptions.saturating_sub(1);
