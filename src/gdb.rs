@@ -146,7 +146,7 @@ impl GdbTarget {
         let uc: &mut Unicorn<'static, ()> = unsafe { &mut *raw };
 
         let result = uc.emu_start(
-            current_pc,
+            thumb(current_pc),
             stop_addr.unwrap_or(0) as u64,
             0,
             max_instructions,
@@ -167,7 +167,14 @@ impl GdbTarget {
 
         match result {
             Ok(_) => QuantumResult::Done,
-            Err(_) => QuantumResult::Halted,
+            Err(e) => {
+                warn!(
+                    "GDB quantum emu_start error at pc=0x{:#010x}: {:?}",
+                    self.current_pc,
+                    e
+                );
+                QuantumResult::Halted
+            }
         }
     }
 }
@@ -237,9 +244,9 @@ impl SingleThreadBase for GdbTarget {
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write sp: {e:?}")))?;
         uc.reg_write(RegisterARM::LR, regs.lr as u64)
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write lr: {e:?}")))?;
-        uc.reg_write(RegisterARM::PC, thumb(regs.pc as u64))
+        uc.reg_write(RegisterARM::PC, regs.pc as u64)
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write pc: {e:?}")))?;
-        self.current_pc = thumb(regs.pc as u64);
+        self.current_pc = regs.pc as u64;
         uc.reg_write(RegisterARM::CPSR, regs.cpsr as u64)
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write cpsr: {e:?}")))?;
         Ok(())

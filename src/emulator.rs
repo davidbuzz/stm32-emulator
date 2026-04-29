@@ -390,7 +390,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             d,
             deferred_irq,
             &gdb_shared,
-            thumb(pc),
+            pc,
             args.stop_addr,
         );
 
