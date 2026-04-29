@@ -24,6 +24,9 @@ pub struct Tim {
     smcr: u32,
     dier: u32,
     sr: u32,
+    ccmr1: u32,
+    ccmr2: u32,
+    ccer: u32,
     cnt: u32,
     psc: u32,
     arr: u32,
@@ -170,6 +173,9 @@ impl Peripheral for Tim {
             0x000c => self.dier,
             0x0010 => self.sr,
             0x0014 => 0,   // EGR is write-only
+            0x0018 => self.ccmr1,
+            0x001c => self.ccmr2,
+            0x0020 => self.ccer,
             0x0024 => self.cnt,
             0x0028 => self.psc,
             0x002c => self.arr,
@@ -197,7 +203,7 @@ impl Peripheral for Tim {
             }
             // Firmware often clears status flags by writing 0 (write-0-to-clear).
             0x0010 => self.sr &= value,
-            0x0014 => {
+            0x0014 => { // EGR
                 // EGR (Event Generation Register): writing bit 0 forces an update event.
                 if value & 1 != 0 {
                     self.sr |= 1; // set UIF
@@ -221,6 +227,9 @@ impl Peripheral for Tim {
                     }
                 }
             }
+            0x0018 => self.ccmr1 = value,
+            0x001c => self.ccmr2 = value,
+            0x0020 => self.ccer = value,
             0x0024 => {
                 debug!("{} write CNT=0x{:08x}", self.name, value);
                 self.cnt = value;

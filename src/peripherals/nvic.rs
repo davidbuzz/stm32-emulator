@@ -164,9 +164,26 @@ impl Nvic {
             }
         }
 
+        // Debug: show BASEPRI and pending set when IRQ 67 is in the queue after a clear-basepri window
+        let irq67_bit = 1u128 << (IRQ_OFFSET + 67);
+        if self.pending & irq67_bit != 0 && !basepri_masked {
+            let basepri_val = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap();
+            debug!("NVIC take_pending: irq67_pending=true basepri={:#04x} next={:?} sys_pending={:#06x}",
+                basepri_val, self.next_pending_intr(), self.pending & ((1u128 << IRQ_OFFSET) - 1));
+        }
+
         if let Some(irq) = self.get_and_clear_next_intr_pending() {
+            if irq == 67 {
+                let bm = basepri_masked;
+                debug!("NVIC take_pending get_and_clear returned 67 basepri_masked={} → will_return={}", bm, !bm);
+            }
             if irq >= 0 && basepri_masked {
                 self.set_intr_pending(irq);
+                // Log once when OTG FS IRQ 67 is blocked by BASEPRI -- helps diagnose USB stalls.
+                if irq == 67 {
+                    let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap();
+                    debug!("NVIC IRQ 67 deferred: basepri_masked basepri={:#04x}", basepri);
+                }
                 return None;
             }
             Some(irq)
@@ -189,7 +206,7 @@ impl Nvic {
 
     pub fn run_interrupt(&mut self, sys: &System, irq: i32) {
         if irq == 67 || irq == 50 {
-            debug!("NVIC dispatching IRQ {} vector={:#08x}", irq, Self::read_vector_addr(sys, self.vector_table_addr, irq));
+            info!("NVIC dispatching IRQ {} vector={:#08x}", irq, Self::read_vector_addr(sys, self.vector_table_addr, irq));
         }
         let vector = Self::read_vector_addr(sys, self.vector_table_addr, irq);
 

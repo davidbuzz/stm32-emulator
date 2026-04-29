@@ -68,7 +68,7 @@ const SETUP_SET_ADDRESS: [u32; 2] = [0x0001_0500, 0x0000_0000];
 const SETUP_SET_CONFIG: [u32; 2] = [0x0001_0900, 0x0000_0000];
 
 /// State of the EP0 RX FIFO / GRXSTSP pop sequence for a synthetic setup packet.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 enum Ep0RxState {
     #[default]
     Idle,
@@ -416,7 +416,7 @@ impl OtgFsState {
             0x0018 => self.gintmsk,
             0x001c | 0x0020 => {
                 // GRXSTSP is a pop register; serve the enumeration FIFO state machine.
-                match self.ep0_rx_state {
+                let result = match self.ep0_rx_state {
                     Ep0RxState::RxFlvlStatusPending => {
                         self.ep0_rx_state = Ep0RxState::RxFlvlFifoPending;
                         self.ep0_fifo_read_count = 0;
@@ -428,7 +428,9 @@ impl OtgFsState {
                         GRXSTSP_PKTSTS_SETUP_COMPL
                     }
                     _ => self.grxstsr,
-                }
+                };
+                otg_debug!("GRXSTSP pop at 0x{:03x} state_after={:?} result={:#010x}", offset, self.ep0_rx_state, result);
+                result
             }
             0x0024 => self.grxfsiz,
             0x0028 => self.dieptxf0,
@@ -591,6 +593,18 @@ impl Peripheral for OtgFs {
             && shared.doeptsiz[0] != 0
             && shared.doepctl[0] & (DOEPCTL_USBAEP | DOEPCTL_CNAK | DOEPCTL_EPENA) != 0;
 
+        // Log once when we're waiting for ep0_armed but it isn't true yet - for key enum stages.
+        if !ep0_armed && shared.ep0_rx_state == Ep0RxState::Idle
+            && (shared.enum_stage == UsbEnumStage::DeliverSetConfig
+                || shared.enum_stage == UsbEnumStage::DeliverSetAddress)
+        {
+            // Only log rarely to avoid flood; use the doeptsiz==0 case as the diagnostic.
+            if shared.doeptsiz[0] == 0 {
+                otg_debug!("ep0_armed=false waiting: enum_stage={:?} doeptsiz0=0 doepctl0={:#010x}",
+                    shared.enum_stage, shared.doepctl[0]);
+            }
+        }
+
         if ep0_armed && shared.ep0_rx_state == Ep0RxState::Idle {
             let maybe_pkt = match shared.enum_stage {
                 UsbEnumStage::DeliverSetAddress => Some(SETUP_SET_ADDRESS),
@@ -607,8 +621,14 @@ impl Peripheral for OtgFs {
 
         // On real hardware RXFLVL stays asserted while the RxFIFO is non-empty.
         // The ChibiOS ISR clears all GINTSTS bits (including RXFLVL) at ISR entry.
-        // Re-assert RXFLVL here so a second IRQ fires to deliver the PKTSTS=4
-        // (setup complete) pop, which the firmware reads in the next ISR invocation.
+        // We must reset irq_latched BEFORE re-asserting RXFLVL here, otherwise the
+        // step() that runs immediately after firmware's GINTSTS-clear sees masked_interrupts()
+        // non-zero (from the re-asserted RXFLVL) and never resets irq_latched, so the
+        // second RXFLVL IRQ that handles PKTSTS=4 never fires.
+        if shared.gahbcfg & GAHBCFG_GINT == 0 || shared.masked_interrupts() == 0 {
+            shared.irq_latched = false;
+        }
+
         if matches!(
             shared.ep0_rx_state,
             Ep0RxState::RxFlvlFifoPending | Ep0RxState::RxFlvlCompletePending
@@ -617,6 +637,7 @@ impl Peripheral for OtgFs {
         }
 
         if shared.ep0_rx_state == Ep0RxState::StupPending && ep0_armed {
+            info!("OTG_FS: StupPending fires → DOEPINT STUP|XFRC  (enum_stage={:?})", shared.enum_stage);
             shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP | DOEPINT_XFRC);
             shared.ep0_rx_state = Ep0RxState::Idle;
             // Force irq_latched false so the new OEPINT bit triggers a fresh IRQ 67 raise.
@@ -626,6 +647,7 @@ impl Peripheral for OtgFs {
         }
 
         if shared.ep0_in_transfer_pending && shared.diepctl[0] & DIEPCTL_EPENA != 0 {
+            info!("OTG_FS: EP0 IN ZLP XFRC (enum_stage={:?} diepctl0={:#010x})", shared.enum_stage, shared.diepctl[0]);
             shared.clear_in_endpoint_interrupt(0, DIEPINT_TXFE);
             shared.mark_in_endpoint_interrupt(0, DIEPINT_XFRC);
             shared.diepctl[0] &= !DIEPCTL_EPENA;
@@ -674,6 +696,8 @@ impl Peripheral for OtgFs {
         }
 
         if shared.gahbcfg & GAHBCFG_GINT == 0 || shared.masked_interrupts() == 0 {
+            // Already handled above (before RXFLVL re-assertion). Repeat here to also catch
+            // the case where no RXFLVL is pending but other interrupt bits were just cleared.
             shared.irq_latched = false;
         } else if !shared.irq_latched {
             shared.maybe_raise_irq(sys);
@@ -691,11 +715,13 @@ pub fn fifo_read(_ep: usize) -> u32 {
             let idx = s.ep0_fifo_read_count as usize;
             let word = if idx < 2 { s.ep0_pending_setup[idx] } else { 0 };
             s.ep0_fifo_read_count += 1;
+            debug!("OTG_FS FIFO read idx={} word={:#010x} state_after={:?}", idx, word, s.ep0_rx_state);
             if s.ep0_fifo_read_count >= 2 {
                 s.ep0_rx_state = Ep0RxState::RxFlvlCompletePending;
             }
             word
         } else {
+            debug!("OTG_FS FIFO read (state={:?} → 0)", s.ep0_rx_state);
             0
         }
     })

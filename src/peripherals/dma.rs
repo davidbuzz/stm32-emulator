@@ -5,8 +5,8 @@
 // Key registers: LISR/HISR/LIFCR/HIFCR plus stream windows at 0x10 + n*0x18.
 // Key behavior: stream EN, NDTR countdown, PAR/MxAR addressing, TCIF status bits.
 // Critical for this emulator: firmware uses DMA completion flags and IRQs for boot/runtime.
-// Current model covers stream decode, immediate transfers, TC flag setting, and TC IRQ pending.
-// Still incomplete: request-line driven transfers, FIFO thresholds, HT/TE signaling, conflicts.
+// Current model: per-beat PINC/MINC, circular-mode NDTR reload, TC IRQ from both EN=1 and step().
+// Still incomplete: FIFO thresholds, HT/TE signaling, double-buffer mode, stream arbitration.
 // Datasheet/reference anchors: STM32F4 RM DMA chapter and cubeblack/STM32F4_DMA.md.
 
 use crate::util::UniErr;
@@ -64,12 +64,24 @@ impl Dma {
             _ => None,
         }
     }
+
+    fn signal_tc(&mut self, sys: &System, stream_idx: usize) {
+        self.set_tcif(stream_idx);
+        if self.streams[stream_idx].tcie_enabled() {
+            if let Some(irq) = self.stream_irq(stream_idx) {
+                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+            }
+        }
+    }
 }
 
 impl Peripheral for Dma {
-    fn step(&mut self, _sys: &System) {
-        for stream in &mut self.streams {
-            stream.step_idle_usart_rx();
+    fn step(&mut self, sys: &System) {
+        let name = self.name.clone();
+        for i in 0..8 {
+            if self.streams[i].step_deferred(&name, sys) {
+                self.signal_tc(sys, i);
+            }
         }
     }
 
@@ -93,13 +105,7 @@ impl Peripheral for Dma {
             Access::Reg(_) => {}
             Access::StreamReg(i, offset) => {
                 if self.streams[i].write(&self.name, sys, offset, value) {
-                    self.set_tcif(i);
-
-                    if self.streams[i].tcie_enabled() {
-                        if let Some(irq) = self.stream_irq(i) {
-                            sys.p.nvic.borrow_mut().set_intr_pending(irq);
-                        }
-                    }
+                    self.signal_tc(sys, i);
                 }
             }
         }
@@ -111,6 +117,7 @@ struct Stream {
     pub cr: u32,
     pub next_cr: Option<u32>,
     pub ndtr: u32,
+    pub initial_ndtr: u32,
     pub par: u32,
     pub m0ar: u32,
     pub m1ar: u32,
@@ -137,8 +144,20 @@ impl Stream {
         }
     }
 
-    // 1, 2, 4 (8bit, 16bit, 32bit)
-    fn word_size(&self) -> usize {
+    fn is_circular(&self) -> bool {
+        self.cr & (1 << 8) != 0
+    }
+
+    fn minc(&self) -> bool {
+        self.cr & (1 << 10) != 0
+    }
+
+    fn pinc(&self) -> bool {
+        self.cr & (1 << 9) != 0
+    }
+
+    // Peripheral data size in bytes (PSIZE field, SxCR bits [12:11]).
+    fn psize(&self) -> usize {
         match (self.cr >> 11) & 0b11 {
             0b00 => 1,
             0b01 => 2,
@@ -147,8 +166,22 @@ impl Stream {
         }
     }
 
-    fn data_size(&self) -> usize {
-        self.word_size() * self.ndtr as usize
+    // Memory data size in bytes (MSIZE field, SxCR bits [14:13]).
+    fn msize(&self) -> usize {
+        match (self.cr >> 13) & 0b11 {
+            0b00 => 1,
+            0b01 => 2,
+            0b10 => 4,
+            _ => 1,
+        }
+    }
+
+    fn peri_data_size(&self) -> usize {
+        self.psize() * self.ndtr as usize
+    }
+
+    fn mem_data_size(&self) -> usize {
+        self.msize() * self.ndtr as usize
     }
 
     fn data_addr(&self) -> u32 {
@@ -159,63 +192,145 @@ impl Stream {
         }
     }
 
+    /// Perform one complete DMA transfer respecting PINC/MINC.
+    /// For P2M (Read): NDTR beats, each reading psize bytes from peripheral (PINC) into
+    ///   msize bytes at memory (MINC). Total bytes: psize*NDTR from peri, msize*NDTR to mem.
+    /// For M2P (Write): NDTR beats, reading msize bytes from memory (MINC), writing psize
+    ///   bytes to peripheral (PINC).
+    /// For MemCopy: source and destination both increment by msize per beat.
     fn do_xfer(&self, name: &str, sys: &System) {
         let dir = self.dir();
-        let data_addr = self.data_addr();
-        let size = self.data_size();
+        let mem_addr = self.data_addr();
         let peri_addr = self.par;
+        let ndtr = self.ndtr as usize;
+        let psize = self.psize();
+        let msize = self.msize();
+        let minc = self.minc();
+        let pinc = self.pinc();
+
+        if ndtr == 0 { return; }
 
         let peri = Peripherals::get_peripheral(&sys.p.peripherals, peri_addr);
 
-        let (src, dst) = match dir {
-            Dir::Read => (peri_addr, data_addr),
-            Dir::Write => (data_addr, peri_addr),
-            Dir::MemCopy => (peri_addr, data_addr),
-            Dir::Invalid => (0,0),
-        };
-
         if log::log_enabled!(log::Level::Debug) {
             let peri_desc = sys.p.addr_desc(peri_addr);
-            debug!("{} xfer initiated channel={} peri_{} dir={:?} addr=0x{:08x} size={}",
-                name, self.channel(), peri_desc, dir, data_addr, size);
+            debug!("{} xfer channel={} peri_{} dir={:?} mem=0x{:08x} ndtr={} psize={} msize={} circ={} minc={} pinc={}",
+                name, self.channel(), peri_desc, dir, mem_addr, ndtr,
+                psize, msize, self.is_circular(), minc, pinc);
         }
 
-        let buf = match dir {
-            Dir::Read => {
-                let b = peri.map(|p| p.peripheral.borrow_mut().read_dma(sys, peri_addr-p.start, size));
-                // Tell the peripheral where this RX DMA is going so that the paired TX DMA
-                // (write_dma) can patch the correct RAM location with full-duplex MISO bytes.
-                if let Some(p) = peri {
-                    p.peripheral.borrow_mut().set_dma_rx_dest(dst);
-                }
-                b
-            }
-            Dir::Write | Dir::MemCopy => {
-                sys.uc.borrow().mem_read_as_vec(src.into(), size)
-                    .map_err(|e| warn!("DMA read failed addr=0x{:08x} size={} e={}", src, size, UniErr(e)))
-                    .map(|v| v.into())
-                    .ok()
-            }
-            Dir::Invalid => Some(vec![].into()),
-        };
-
-        let mut buf = buf.unwrap_or_else(|| {
-            let mut rx = vec![];
-            rx.resize(size, 0);
-            rx.into()
-        });
-
-        trace!("{} xfer buf={:x?}", name, buf);
-
         match dir {
-            Dir::Write => {
-                peri.map(|p| p.peripheral.borrow_mut().write_dma(sys, peri_addr-p.start, buf));
-            }
-            Dir::Read | Dir::MemCopy => {
-                if let Err(e) = sys.uc.borrow_mut().mem_write(dst.into(), buf.make_contiguous()) {
-                    warn!("DMA read failed addr=0x{:08x} size={} e={}", dst, size, UniErr(e));
+            Dir::Read => {
+                // P2M: read from peripheral into memory
+                let peri_total = self.peri_data_size();
+                let mem_total = self.mem_data_size();
+
+                let mut buf = if pinc {
+                    // Peripheral address increments: read psize bytes per beat with address advance
+                    let mut v = std::collections::VecDeque::with_capacity(peri_total);
+                    for beat in 0..ndtr {
+                        let beat_offset = (peri_addr + (beat * psize) as u32) - peri_addr;
+                        if let Some(p) = peri {
+                            let mut slice = p.peripheral.borrow_mut().read_dma(sys, beat_offset, psize);
+                            v.extend(slice.drain(..));
+                        } else {
+                            v.extend(std::iter::repeat(0u8).take(psize));
+                        }
+                    }
+                    if let Some(p) = peri {
+                        p.peripheral.borrow_mut().set_dma_rx_dest(mem_addr);
+                    }
+                    v
+                } else {
+                    // Fixed peripheral address (normal case: DR register)
+                    let peri_offset = peri_addr - peri.map(|p| p.start).unwrap_or(peri_addr);
+                    let b = peri.map(|p| {
+                        p.peripheral.borrow_mut().set_dma_rx_dest(mem_addr);
+                        p.peripheral.borrow_mut().read_dma(sys, peri_offset, peri_total)
+                    });
+                    b.unwrap_or_else(|| {
+                        let mut v = std::collections::VecDeque::new();
+                        v.extend(std::iter::repeat(0u8).take(peri_total));
+                        v
+                    })
+                };
+
+                trace!("{} xfer P2M buf_len={}", name, buf.len());
+
+                if minc {
+                    // Write sequentially to memory
+                    if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), buf.make_contiguous()) {
+                        warn!("DMA P2M write failed addr=0x{:08x} size={} e={}", mem_addr, mem_total, UniErr(e));
+                    }
+                } else {
+                    // Fixed memory address: write last psize bytes repeatedly (or just write once for simplicity)
+                    let bytes = buf.make_contiguous();
+                    if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), &bytes[bytes.len().saturating_sub(msize)..]) {
+                        warn!("DMA P2M write (MINC=0) failed addr=0x{:08x} e={}", mem_addr, UniErr(e));
+                    }
                 }
             }
+
+            Dir::Write => {
+                // M2P: read from memory into peripheral
+                let mem_total = self.mem_data_size();
+                let peri_offset = peri_addr - peri.map(|p| p.start).unwrap_or(peri_addr);
+
+                let buf = if minc {
+                    sys.uc.borrow().mem_read_as_vec(mem_addr.into(), mem_total)
+                        .map_err(|e| warn!("DMA M2P read failed addr=0x{:08x} size={} e={}", mem_addr, mem_total, UniErr(e)))
+                        .map(|v| v.into())
+                        .ok()
+                } else {
+                    // Fixed memory: read one item and repeat for NDTR beats
+                    sys.uc.borrow().mem_read_as_vec(mem_addr.into(), msize)
+                        .ok()
+                        .map(|v| {
+                            let mut buf = std::collections::VecDeque::new();
+                            for _ in 0..ndtr { buf.extend(v.iter()); }
+                            buf
+                        })
+                };
+
+                let buf = buf.unwrap_or_else(|| {
+                    let mut v = std::collections::VecDeque::new();
+                    v.extend(std::iter::repeat(0u8).take(mem_total));
+                    v
+                });
+
+                trace!("{} xfer M2P buf_len={}", name, buf.len());
+
+                if pinc {
+                    // Peripheral address increments: write psize bytes per beat
+                    let bytes: Vec<u8> = buf.into_iter().collect();
+                    for beat in 0..ndtr {
+                        let beat_offset = peri_offset + (beat * psize) as u32;
+                        let slice = &bytes[beat*psize..(beat*psize+psize).min(bytes.len())];
+                        if let Some(p) = peri {
+                            p.peripheral.borrow_mut().write_dma(sys, beat_offset, slice.iter().copied().collect());
+                        }
+                    }
+                } else if let Some(p) = peri {
+                    p.peripheral.borrow_mut().write_dma(sys, peri_offset, buf);
+                }
+            }
+
+            Dir::MemCopy => {
+                let mem_total = self.mem_data_size();
+                let src = peri_addr;
+                let dst = mem_addr;
+
+                let buf = sys.uc.borrow().mem_read_as_vec(src.into(), mem_total)
+                    .map_err(|e| warn!("DMA MemCopy read failed src=0x{:08x} size={} e={}", src, mem_total, UniErr(e)))
+                    .ok();
+
+                if let Some(buf) = buf {
+                    if let Err(e) = sys.uc.borrow_mut().mem_write(dst.into(), &buf) {
+                        warn!("DMA MemCopy write failed dst=0x{:08x} size={} e={}", dst, mem_total, UniErr(e));
+                    }
+                }
+            }
+
             Dir::Invalid => {}
         }
     }
@@ -233,7 +348,7 @@ impl Stream {
                 // wait for it to go to 1 and then 0, with a timeout. So they
                 // are consistently hitting the timeout.
                 // We'll do toggles on the ready flag to speed things up avoiding the timeout.
-                if self.dir() == Dir::Write && self.data_size() == 0 {
+                if self.dir() == Dir::Write && self.ndtr == 0 {
                     self.next_cr = Some(self.cr ^ 1)
                 }
 
@@ -254,7 +369,6 @@ impl Stream {
                 self.cr = value;
                 self.deferred_usart_rx = false;
 
-                // CRx register
                 if value & 1 != 0 {
                     if self.is_deferred_usart_rx(sys) {
                         self.deferred_usart_rx = true;
@@ -262,16 +376,23 @@ impl Stream {
                         return false;
                     }
 
-                    // Enable is on. do the transfer.
                     self.do_xfer(name, sys);
 
-                    value &= !1;
-                    self.ndtr = 0;
-                    self.next_cr = Some(value);
+                    if self.is_circular() {
+                        // Circular: reload NDTR, keep EN=1, signal TC
+                        self.ndtr = self.initial_ndtr;
+                    } else {
+                        value &= !1;
+                        self.ndtr = 0;
+                        self.next_cr = Some(value);
+                    }
                     return true;
                 }
             }
-            0x0004 => { self.ndtr = value & 0xFFFF; }
+            0x0004 => {
+                self.ndtr = value & 0xFFFF;
+                self.initial_ndtr = self.ndtr;
+            }
             0x0008 => { self.par = value; }
             0x000c => { self.m0ar = value; }
             0x0010 => { self.m1ar = value; }
@@ -286,19 +407,34 @@ impl Stream {
         self.dir() == Dir::Read && is_usart_dr_request(&sys.p.addr_desc(self.par))
     }
 
-    fn step_idle_usart_rx(&mut self) {
+    /// Called from Dma::step(). Returns true if a transfer completed and TC should be signaled.
+    fn step_deferred(&mut self, name: &str, sys: &System) -> bool {
         if !self.deferred_usart_rx || self.cr & 1 == 0 {
-            return;
+            return false;
         }
 
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         if now.saturating_sub(self.deferred_since) < USART_RX_IDLE_DISABLE_DELAY {
-            return;
+            return false;
         }
 
-        self.cr &= !1;
-        self.next_cr = None;
+        // Idle window expired: perform the transfer (reads available bytes from USART ext_device)
+        // then decide based on circular mode whether to reload or finish.
+        self.do_xfer(name, sys);
         self.deferred_usart_rx = false;
+
+        if self.is_circular() {
+            self.ndtr = self.initial_ndtr;
+            // Restart the deferred timer so the next batch fires after another idle window
+            self.deferred_usart_rx = true;
+            self.deferred_since = now;
+        } else {
+            self.cr &= !1;
+            self.ndtr = 0;
+            self.next_cr = None;
+        }
+
+        true
     }
 }
 
@@ -325,7 +461,6 @@ enum Reg {
 
 enum Access {
     Reg(Reg),
-    /// CR0, CR1, etc.
     StreamReg(usize, u32),
 }
 

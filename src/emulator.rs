@@ -187,6 +187,9 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
 
             if n % interrupt_period as u64 == 0 {
                 if let Some(irq) = p.nvic.borrow_mut().take_pending_interrupt(&sys) {
+                    if irq == 67 {
+                        info!("EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop");
+                    }
                     *deferred_irq.borrow_mut() = Some(irq);
                     CONTINUE_EXECUTION.store(true, Ordering::Release);
                     uc.emu_stop().unwrap();
@@ -353,6 +356,9 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc");
 
         if let Some(irq) = deferred_irq.borrow_mut().take() {
+            if irq == 67 {
+                info!("EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS={})", NUM_INSTRUCTIONS.load(Ordering::Relaxed));
+            }
             sys.p.nvic.borrow_mut().run_interrupt(&sys, irq);
             pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc after deferred irq");
         }
