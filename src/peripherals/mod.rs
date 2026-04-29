@@ -9,6 +9,7 @@
 // New peripheral work usually starts by adding a dedicated model here and wiring name-based registration.
 // Reference anchors: STM32F427 SVD plus the Cortex-M private-peripheral map.
 
+pub mod adc;
 pub mod rcc;
 pub mod pwr;
 pub mod flash;
@@ -28,6 +29,7 @@ pub mod sdio;
 pub mod tim;
 pub mod exti;
 
+use adc::*;
 use rcc::*;
 use pwr::*;
 use flash::*;
@@ -113,6 +115,7 @@ impl Peripherals {
             .or_else(||        Exti::new(&name))
             .or_else(||         Spi::new(&name, ext_devices))
             .or_else(||        Sdio::new(&name))
+            .or_else(||         Adc::new(&name))
         ;
 
         if let Some(p) = p {

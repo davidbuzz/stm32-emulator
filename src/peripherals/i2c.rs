@@ -100,6 +100,9 @@ impl I2c {
         self.cr1 &= !I2C_CR1_START;
         self.clear_master_state();
         self.sr1 |= I2C_SR1_AF;
+        // Cancel the pending SB event IRQ — firmware already consumed SB by writing DR.
+        // Without this, the SB event fires after the NACK, confusing the interrupt handler.
+        self.pending_event_irq = None;
         self.pending_error_irq = Some(1);
     }
 }

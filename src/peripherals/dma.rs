@@ -148,6 +148,10 @@ impl Stream {
         self.cr & (1 << 8) != 0
     }
 
+    fn is_double_buffer(&self) -> bool {
+        self.cr & (1 << 18) != 0
+    }
+
     fn minc(&self) -> bool {
         self.cr & (1 << 10) != 0
     }
@@ -378,8 +382,12 @@ impl Stream {
 
                     self.do_xfer(name, sys);
 
-                    if self.is_circular() {
-                        // Circular: reload NDTR, keep EN=1, signal TC
+                    if self.is_double_buffer() {
+                        // DBM: toggle CT (bit 19) to switch between M0AR and M1AR, reload NDTR
+                        self.cr ^= 1 << 19;
+                        self.ndtr = self.initial_ndtr;
+                    } else if self.is_circular() {
+                        // Circular without DBM: reload NDTR, keep same buffer
                         self.ndtr = self.initial_ndtr;
                     } else {
                         value &= !1;
@@ -423,9 +431,13 @@ impl Stream {
         self.do_xfer(name, sys);
         self.deferred_usart_rx = false;
 
-        if self.is_circular() {
+        if self.is_double_buffer() {
+            self.cr ^= 1 << 19;
             self.ndtr = self.initial_ndtr;
-            // Restart the deferred timer so the next batch fires after another idle window
+            self.deferred_usart_rx = true;
+            self.deferred_since = now;
+        } else if self.is_circular() {
+            self.ndtr = self.initial_ndtr;
             self.deferred_usart_rx = true;
             self.deferred_since = now;
         } else {

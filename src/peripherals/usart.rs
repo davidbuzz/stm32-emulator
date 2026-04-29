@@ -42,8 +42,10 @@ impl Usart {
             Some(Box::new(Self {
                 name,
                 ext_device,
-                // Keep TXE/TC/RXNE/IDLE set by default to preserve existing boot behavior.
-                sr: (1 << 7) | (1 << 6) | (1 << 5) | (1 << 4),
+                // TXE(7) and TC(6) always set — transmitter immediately ready.
+                // IDLE(4) set — line is idle since no incoming data is modeled.
+                // RXNE(5) cleared — no incoming byte until ext_device provides one.
+                sr: (1 << 7) | (1 << 6) | (1 << 4),
                 ..Default::default()
             }))
         } else {
@@ -57,12 +59,13 @@ impl Peripheral for Usart {
         match offset {
             0x0000 => self.sr,
             0x0004 => {
-                // DR register
+                // DR register: reading clears RXNE
                 let v = self.ext_device.as_ref()
                     .map(|d| d.borrow_mut().read(sys, ()))
                     .unwrap_or(self.dr as u8) as u32;
 
                 self.dr = v;
+                self.sr &= !(1 << 5); // clear RXNE after read
 
                 trace!("{} read={:02x}", self.name, v);
                 v

@@ -30,7 +30,7 @@ const CMD_WAITRESP_MASK: u32 = 0b11 << 6;
 const DCTRL_DTEN: u32 = 1 << 0;
 const SDIO_IRQ_NUMBER: i32 = 49;
 const SD_EJECT_RETRY_LIMIT: u32 = 100;
-const DATA_TIMEOUT_DELAY_STEPS: u8 = 64;
+const DATA_TIMEOUT_DELAY_STEPS: u8 = 4;
 
 const CMD_GO_IDLE_STATE: u32 = 0;
 const CMD_ALL_SEND_CID: u32 = 2;
