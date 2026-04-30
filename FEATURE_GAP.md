@@ -139,7 +139,7 @@ Work this list top-to-bottom; defer lower tiers until higher tiers are demonstra
 
 - [x] Replace toggled `SR1/SR2` stubs with a real transaction state machine (start/address/data/stop progression). Minimal master-side sequencing is now modeled (`START`→`SB`, address phase, `ADDR` clear on `SR1` then `SR2`, STOP/reset paths).
 - [x] Implement key I2C status/control bit semantics (`SB`, `ADDR`, `BTF`, `RXNE`, `TXE`, `AF`, `BERR`, `ARLO`), including clear sequencing. Core bring-up bits are now modeled (`SB`, `ADDR`, `TXE`, `BTF`, `AF`) with `ADDR` clear sequencing; broader fault-cause fidelity (`BERR/ARLO/OVR/TIMEOUT`) is still simplified.
-- [ ] Implement I2C DMA request generation and interrupt paths.
+- [x] Implement I2C DMA request generation and interrupt paths. `CR2.DMAEN` is now honored in `read_dma`/`write_dma` DR paths and DMA completion schedules EV signaling (`BTF`/event IRQ). Remaining gap: RM-accurate peripheral-driven request timing across full transaction phases.
 - [ ] Add board-level I2C device behavior hooks for sensor bring-up paths used by ArduPilot.
 
 ### TIM

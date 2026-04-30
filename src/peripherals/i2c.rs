@@ -264,18 +264,23 @@ impl Peripheral for I2c {
     }
 
     fn read_dma(&mut self, _sys: &System, offset: u32, size: usize) -> VecDeque<u8> {
-        if offset != 0x0010 {
+        if offset != 0x0010 || (self.cr2 & I2C_CR2_DMAEN) == 0 {
             return VecDeque::new();
         }
 
+        // DMA receiver path: bytes are consumed directly into memory, so RXNE remains clear.
+        // Mark transfer progression with BTF and schedule an EV IRQ if enabled.
         self.sr1 &= !I2C_SR1_RXNE;
+        self.sr1 |= I2C_SR1_BTF;
+        self.pending_event_irq = Some(0);
+
         let mut out = VecDeque::with_capacity(size);
         out.extend(std::iter::repeat(0u8).take(size));
         out
     }
 
     fn write_dma(&mut self, _sys: &System, offset: u32, value: VecDeque<u8>) {
-        if offset != 0x0010 {
+        if offset != 0x0010 || (self.cr2 & I2C_CR2_DMAEN) == 0 {
             return;
         }
 
@@ -293,6 +298,7 @@ const I2C_CR1_SWRST: u32 = 1 << 15;
 
 const I2C_CR2_ITERREN: u32 = 1 << 8;
 const I2C_CR2_ITEVTEN: u32 = 1 << 9;
+const I2C_CR2_DMAEN: u32 = 1 << 11;
 
 const I2C_SR1_SB: u32 = 1 << 0;
 const I2C_SR1_ADDR: u32 = 1 << 1;
