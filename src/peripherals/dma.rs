@@ -159,18 +159,18 @@ impl Dma {
         }
     }
 
-    fn find_request_conflict(&self, stream_idx: usize, channel: u8, par: u32) -> Option<usize> {
-        self.streams.iter().enumerate().find_map(|(idx, s)| {
-            if idx != stream_idx
-                && (s.cr & 1) != 0
-                && s.channel() == channel
-                && s.par == par
-            {
+    fn find_request_conflicts(&self, stream_idx: usize, channel: u8) -> Vec<usize> {
+        self.streams
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, s)| {
+                if idx == stream_idx || (s.cr & 1) == 0 || s.channel() != channel {
+                    return None;
+                }
+
                 Some(idx)
-            } else {
-                None
-            }
-        })
+            })
+            .collect()
     }
 }
 
@@ -215,50 +215,61 @@ impl Peripheral for Dma {
                 if offset == 0x0000 && (value & 1) != 0 {
                     let channel = ((value >> 25) & 0b111) as u8;
                     let par = self.streams[i].par;
-                    if let Some(owner) = self.find_request_conflict(i, channel, par) {
-                        // Allow a read/write stream pair to share the same peripheral request.
-                        // This is the normal SPI full-duplex DMA pattern (RX + TX streams).
-                        let new_dir = match (value >> 6) & 0b11 {
-                            0b00 => Dir::Read,
-                            0b01 => Dir::Write,
-                            0b10 => Dir::MemCopy,
-                            _ => Dir::Invalid,
-                        };
+                    let peri_desc = sys.p.addr_desc(par);
+                    let peri_name = peripheral_name_from_desc(&peri_desc);
+                    let new_dir = match (value >> 6) & 0b11 {
+                        0b00 => Dir::Read,
+                        0b01 => Dir::Write,
+                        0b10 => Dir::MemCopy,
+                        _ => Dir::Invalid,
+                    };
+                    let new_pl = ((value >> 16) & 0b11) as u8;
+
+                    let owners = self.find_request_conflicts(i, channel);
+                    let mut blocking_owners = Vec::new();
+                    for owner in owners {
                         let owner_dir = self.streams[owner].dir();
+                        // Keep full-duplex read/write stream pair sharing for SPI-style transfers.
                         let full_duplex_pair =
                             (new_dir == Dir::Read && owner_dir == Dir::Write)
                             || (new_dir == Dir::Write && owner_dir == Dir::Read);
-                        if full_duplex_pair {
-                            self.streams[i].write(&self.name, i, sys, offset, value);
-                            return;
+                        if !full_duplex_pair {
+                            blocking_owners.push(owner);
                         }
+                    }
 
-                        let new_pl = ((value >> 16) & 0b11) as u8;
-                        let owner_pl = self.streams[owner].priority();
+                    if !blocking_owners.is_empty() {
+                        let max_owner_pl = blocking_owners
+                            .iter()
+                            .map(|idx| self.streams[*idx].priority())
+                            .max()
+                            .unwrap_or(0);
 
-                        if new_pl > owner_pl {
-                            self.streams[owner].cr &= !1;
-                            self.streams[owner].deferred_usart_rx = false;
-                            debug!(
-                                "{} stream={} preempted stream={} on conflicting request channel={} par=0x{:08x} (pl {} > {})",
-                                self.name,
-                                i,
-                                owner,
-                                channel,
-                                par,
-                                new_pl,
-                                owner_pl
-                            );
+                        if new_pl > max_owner_pl {
+                            for owner in blocking_owners {
+                                self.streams[owner].cr &= !1;
+                                self.streams[owner].deferred_usart_rx = false;
+                                debug!(
+                                    "{} stream={} preempted stream={} on conflicting request channel={} peri={} (pl {} > {})",
+                                    self.name,
+                                    i,
+                                    owner,
+                                    channel,
+                                    peri_desc,
+                                    new_pl,
+                                    self.streams[owner].priority()
+                                );
+                            }
                         } else {
                             self.signal_mode_error(sys, i);
                             debug!(
-                                "{} stream={} blocked conflicting request channel={} par=0x{:08x} (pl {} <= {})",
+                                "{} stream={} blocked conflicting request channel={} peri={} (pl {} <= max_owner_pl {})",
                                 self.name,
                                 i,
                                 channel,
-                                par,
+                                peri_desc,
                                 new_pl,
-                                owner_pl
+                                max_owner_pl
                             );
                             return;
                         }
