@@ -33,8 +33,8 @@ const USART_CR1_TXEIE: u32 = 1 << 7; // TXE interrupt enable
 const USART_CR1_TCIE: u32 = 1 << 6;  // TC interrupt enable
 const USART_CR1_RXNEIE: u32 = 1 << 5;// RXNE interrupt enable
 
-// TX state transitions: TXE clears on write to DR, TC clears on new DR write, then both set after "transmission"
-const TX_COMPLETION_DELAY: u64 = 10;
+// Default TX latency used when BRR has not been configured yet.
+const TX_COMPLETION_DELAY_DEFAULT: u64 = 10;
 
 #[derive(Default)]
 pub struct Usart {
@@ -79,11 +79,27 @@ impl Usart {
         }
     }
 
+    fn tx_completion_delay(&self) -> u64 {
+        // BRR[15:4]=mantissa, BRR[3:0]=fraction (oversampling by 16 path).
+        // Use a bounded instruction-latency approximation so BRR changes affect
+        // TXE/TC timing without stalling execution at very low baud values.
+        if self.brr == 0 {
+            return TX_COMPLETION_DELAY_DEFAULT;
+        }
+
+        let mantissa = (self.brr >> 4) & 0x0fff;
+        let fraction = self.brr & 0x000f;
+        let usartdiv_x16 = (mantissa << 4) | fraction;
+        let raw_delay = (usartdiv_x16 as u64) / 2;
+
+        raw_delay.clamp(2, 128)
+    }
+
     /// Service TX state machine: transition TXE/TC based on TX timing
     fn service_tx_state(&mut self, sys: &System) {
         if let Some(tx_since) = self.tx_active_since {
             let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
-            if now.saturating_sub(tx_since) >= TX_COMPLETION_DELAY {
+            if now.saturating_sub(tx_since) >= self.tx_completion_delay() {
                 // TX completion delay expired: set both TXE and TC
                 self.sr |= USART_SR_TXE | USART_SR_TC;
                 self.tx_active_since = None;

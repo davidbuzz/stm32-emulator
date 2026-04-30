@@ -13,7 +13,7 @@
 | RCC Replace always-ready RCC behavior with stateful transitions for CR CFGR and oscillator and PLL paths. | high | done | update_cr_ready_bits mirrors HSI HSE PLL PLLI2S PLLSAI ON→RDY. update_cfgr_status_bits mirrors SW→SWS. BDCR and CSR LSE LSI same pattern. Boot loop no longer depends on bypass. |
 | RCC Implement effective bus and clock configuration impacts on peripheral timing. | medium | open | Affects UART baud-rate accuracy and TIM prescaler alignment. Not a gate for CubeBlack boot; reduces timing accuracy. |
 | USB OTG FS remains partial for full CDC-accurate endpoint FIFO and interrupt behavior. | medium | partially implemented | Full synthetic enumeration: USBRST ENUMDNE SOF EP0 SETUP ZLP SET_ADDRESS SET_CONFIG CDC ACM handshake. EP1 bulk IN TXFE path captures console output. FIFO threshold semantics and non-enumeration OUT transfer handling remain. |
-| USART Implement baud-rate effects from BRR for timing assumptions. | medium | open | Timing-sensitive firmware may depend on BRR effects. |
+| USART Implement baud-rate effects from BRR for timing assumptions. | medium | partially implemented | BRR now influences TXE/TC completion latency via bounded delay derived from mantissa/fraction. RX sampling/parity framing timing remains simplified. |
 | SPI Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | open | Needed by CubeBlack peripheral behavior. |
 | SPI Implement SPI error and interrupt signaling paths. | medium | open | Needs RXNE TXE and ERR interrupt behavior. |
 | TIM Extend timer coverage beyond current subset based on runtime use. | medium | open | Prioritize runtime-used instances and channels first. |
