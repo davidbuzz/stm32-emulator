@@ -17,6 +17,7 @@ use super::Peripheral;
 use super::Peripherals;
 
 const USART_RX_IDLE_DISABLE_DELAY: u64 = 20_000;
+const DMA_EN_DISABLE_DELAY: u64 = 8;
 
 #[derive(Default)]
 pub struct Dma {
@@ -293,6 +294,7 @@ struct Stream {
     pub fcr: u32,
     deferred_usart_rx: bool,
     deferred_since: u64,
+    disable_requested_at: Option<u64>,
 }
 
 impl Stream {
@@ -378,6 +380,18 @@ impl Stream {
             self.m1ar
         } else {
             self.m0ar
+        }
+    }
+
+    /// Service EN disable request: if disable was requested and enough cycles have passed,
+    /// clear the EN bit (set bit 0 to 0) in CR. This enforces STM32F4 timing for EN transitions.
+    fn service_disable_delay(&mut self) {
+        if let Some(disable_at) = self.disable_requested_at {
+            let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+            if now.saturating_sub(disable_at) >= DMA_EN_DISABLE_DELAY {
+                self.cr &= !1;  // Clear EN (bit 0)
+                self.disable_requested_at = None;
+            }
         }
     }
 
@@ -583,6 +597,11 @@ impl Stream {
     }
 
     pub fn read(&mut self, _name: &str, _sys: &System, offset: u32) -> u32 {
+        // Service disable delay before reading CR to ensure EN bit is properly cleared
+        if offset == 0x0000 {
+            self.service_disable_delay();
+        }
+
         match offset {
             0x0000 => {
                 let v = self.cr;
@@ -613,16 +632,34 @@ impl Stream {
     pub fn write(&mut self, dma_name: &str, stream_idx: usize, sys: &System, offset: u32, mut value: u32) -> StreamWriteResult {
         match offset {
             0x0000 => {
-                let was_enabled = self.cr & 1 != 0;
-                self.cr = value;
+                // Service any pending disable delay before processing new CR write
+                self.service_disable_delay();
 
-                // EN set while already enabled should not retrigger a new transfer.
-                if (value & 1) != 0 && was_enabled {
+                let was_enabled = self.cr & 1 != 0;
+                let new_enabled = value & 1 != 0;
+
+                // If EN=0 is being set, record disable request timestamp
+                if was_enabled && !new_enabled {
+                    self.disable_requested_at = Some(NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed));
+                    self.cr = value;
+                    self.deferred_usart_rx = false;
                     return StreamWriteResult::Noop;
                 }
 
-                // EN clear requests disable; keep it simple for now by canceling deferred RX window.
-                if (value & 1) == 0 {
+                // If EN=1 and disable is pending, block the write
+                if new_enabled && self.disable_requested_at.is_some() {
+                    return StreamWriteResult::Noop;
+                }
+
+                self.cr = value;
+
+                // EN set while already enabled should not retrigger a new transfer.
+                if new_enabled && was_enabled {
+                    return StreamWriteResult::Noop;
+                }
+
+                // EN clear request (without pending disable) - shouldn't reach here but be safe
+                if !new_enabled {
                     self.deferred_usart_rx = false;
                     return StreamWriteResult::Noop;
                 }
