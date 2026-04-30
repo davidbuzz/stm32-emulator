@@ -1,15 +1,15 @@
 | Technical Item | Priority | Completion | Notes |
 | --- | --- | --- | --- |
-| DMA Implement full FIFO direct-mode threshold semantics and FIFO state machine. | high | open | Basic chunk granularity implemented; full FIFO level status and error-cause fidelity still missing. |
-| DMA Implement full DMA interrupt signaling classes with matching status visibility. | high | open | TC HT TE DME FE class paths wired; RM-accurate trigger conditions remain incomplete. |
+| DMA Implement full FIFO direct-mode threshold semantics and FIFO state machine. | high | partially implemented | FCR FS status field now dynamic (001=busy when EN=1, 100=idle). HT signal uses initial_ndtr > 1 fix. Full threshold underrun/overrun trigger conditions still missing. |
+| DMA Implement full DMA interrupt signaling classes with matching status visibility. | high | partially implemented | TC HT TE DME FE all wired with NVIC pending via stream_irq. signal_mode_error dispatches FE vs DME based on FIFO mode. RM-accurate trigger threshold and burst-error conditions remain edge cases. |
 | DMA Implement broader request conflict handling and arbitration for shared requests. | high | open | Current arbitration handles duplicate channel and PAR conflicts only. |
 | DMA Implement full stream priority arbitration semantics. | high | open | Initial PL-based preemption exists but wider cross-stream arbitration is incomplete. |
 | DMA Implement STM32F4-accurate EN disable and re-enable sequencing timing. | high | done | Enforce 8-instruction delay between EN=0 and EN=1. disable_requested_at field tracks pending disables; service_disable_delay() gates re-enable. CR read/write paths call service_disable_delay(). Validated at 120M instructions. |
-| USART Implement CR1 CR2 CR3 behavior beyond stubs. | high | open | Needs UE TE RE stop bits parity and interrupt-enable semantics. |
-| USART Implement realistic SR transitions. | high | open | Needs TXE TC RXNE IDLE and error-flag state machine behavior. |
-| USART Implement UART USART interrupt generation and clearing rules. | high | open | TXE RXNE TC and error paths still pending. |
-| SPI Implement stateful SPI status flags instead of synthetic toggles. | high | open | Needs TXE RXNE BSY and OVR MODF paths. |
-| SPI Implement SPI DMA request generation for RX and TX. | high | open | Required for realistic sensor traffic behavior. |
+| USART Implement CR1 CR2 CR3 behavior beyond stubs. | high | partially implemented | UE TE RE gating implemented: DR writes only reach ext_device when UE+TE set; full stop-bits parity and CR2/CR3 depth still missing. |
+| USART Implement realistic SR transitions. | high | done | TX state machine: TXE/TC cleared on DR write, both set after 10-instruction delay. SR write only clears TC/RXNE. Initial SR: TXE+TC+IDLE set. |
+| USART Implement UART USART interrupt generation and clearing rules. | high | done | TXEIE and TCIE trigger NVIC pending via IRQ looked up from DeviceMeta with STM32F427 fallback table. |
+| SPI Implement stateful SPI status flags instead of synthetic toggles. | high | done | rxne bool state: clears on DR read, sets on DR write. TXE always=1. CR2 now readable. OVR MODF BSY still static. |
+| SPI Implement SPI DMA request generation for RX and TX. | high | done | DMA fires when stream EN=1 and PAR points to SPI DR; read_dma/write_dma hooks handle full-duplex exchange. TXDMAEN/RXDMAEN in CR2 gated correctly. |
 | RCC Replace always-ready RCC behavior with stateful transitions for CR CFGR and oscillator and PLL paths. | high | open | Remove hidden firmware bypass dependence. |
 | RCC Implement effective bus and clock configuration impacts on peripheral timing. | high | open | Affects UART TIM and DMA pacing assumptions. |
 | USB OTG FS remains partial for full CDC-accurate endpoint FIFO and interrupt behavior. | high | open | Further USB behavior depth still needed. |
