@@ -124,7 +124,7 @@ Work this list top-to-bottom; defer lower tiers until higher tiers are demonstra
 
 - [ ] Implement `CR1/CR2/CR3` behavior beyond DR/SR stubs (UE/TE/RE, stop bits, parity, interrupt enable bits).
 - [ ] Implement realistic `SR` flag transitions (`TXE`, `TC`, `RXNE`, `IDLE`, error bits) instead of always-ready reads.
-- [ ] Implement DMA coupling for UART/USART (`DMAT/DMAR` in `CR3`) so serial TX/RX can be DMA-driven.
+- [ ] Implement DMA coupling for UART/USART (`DMAT/DMAR` in `CR3`) so serial TX/RX can be DMA-driven. **Investigation Note (2026-04-30)**: A naive implementation forwarding all USART DR reads/writes through `read_dma`/`write_dma` methods caused severe performance regression (~80% slowdown: 120M instructions in 120s vs. baseline 120s for full execution), likely due to per-byte ext_device interaction overhead during DMA bursts. Reverted pending a more efficient implementation strategy (e.g., deferred/windowed reads or ext_device buffering). Current baseline avoids DMA coupling for USART to preserve validation speed.
 - [ ] Implement UART/USART interrupt generation (TXE/RXNE/TC/error paths) and clearing rules.
 - [ ] Implement baud-rate effects (`BRR`) enough for firmware timing assumptions.
 
