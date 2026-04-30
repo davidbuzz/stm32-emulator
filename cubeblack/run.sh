@@ -29,8 +29,25 @@ fi
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
-if command -v /usr/bin/time >/dev/null 2>&1; then
-	/usr/bin/time -f "$TIME_FORMAT" timeout 120 "${emulator_cmd[@]}" 2>&1 | tee "$LOG_FILE"
-else
-	timeout 120 "${emulator_cmd[@]}" 2>&1 | tee "$LOG_FILE"
-fi
+run_with_logging() {
+	if command -v /usr/bin/time >/dev/null 2>&1; then
+		/usr/bin/time -f "$TIME_FORMAT" "${emulator_cmd[@]}"
+	else
+		"${emulator_cmd[@]}"
+	fi
+}
+
+run_with_logging >"$LOG_FILE" 2>&1 &
+emulator_pid=$!
+
+for _ in $(seq 120); do
+	if ! kill -0 "$emulator_pid" 2>/dev/null; then
+		break
+	fi
+	sleep 1
+done
+
+kill -9 "$emulator_pid" 2>/dev/null || true
+wait "$emulator_pid" 2>/dev/null || true
+
+cat "$LOG_FILE"

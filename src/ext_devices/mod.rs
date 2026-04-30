@@ -155,9 +155,23 @@ impl ExtDevicesConfig {
 
 ///////////////////////////////////////////////////////////////////////////////////////
 
-pub trait ExtDevice<A, T> {
+pub trait ExtDevice<A: Clone, T: Copy> {
     /// Should returns "{peri_name} {ext_device_name}"
     fn connect_peripheral<'a>(&mut self, peri_name: &str) -> String;
     fn read(&mut self, sys: &System, addr: A) -> T;
     fn write(&mut self, sys: &System, addr: A, v: T);
+
+    fn read_batch(&mut self, sys: &System, addr: A, len: usize) -> Vec<T> {
+        let mut out = Vec::with_capacity(len);
+        for _ in 0..len {
+            out.push(self.read(sys, addr.clone()));
+        }
+        out
+    }
+
+    fn write_batch(&mut self, sys: &System, addr: A, values: &[T]) {
+        for value in values {
+            self.write(sys, addr.clone(), *value);
+        }
+    }
 }

@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::collections::VecDeque;
 
 use crate::ext_devices::{ExtDevices, ExtDevice};
 use super::Peripheral;
@@ -18,6 +19,8 @@ use super::Peripheral;
 use crate::system::System;
 const USART_SR_TC: u32 = 1 << 6;
 const USART_SR_TXE: u32 = 1 << 7;
+const USART_CR3_DMAT: u32 = 1 << 6;  // Transmit DMA enable
+const USART_CR3_DMAR: u32 = 1 << 5;  // Receive DMA enable
 
 #[derive(Default)]
 pub struct Usart {
@@ -87,11 +90,16 @@ impl Peripheral for Usart {
                 self.sr = (value & !(USART_SR_TXE | USART_SR_TC)) | USART_SR_TXE | USART_SR_TC;
             }
             0x0004 => {
-                // DR register
+                // DR register - handling depends on whether DMA TX is enabled
                 self.dr = value & 0xFF;
-                self.ext_device.as_ref().map(|d|
-                    d.borrow_mut().write(sys, (), value as u8)
-                );
+                
+                // If DMA TX is not enabled, write directly to ext_device
+                // (If DMAT is set, DMA controller handles writes via write_dma())
+                if (self.cr3 & USART_CR3_DMAT) == 0 {
+                    self.ext_device.as_ref().map(|d|
+                        d.borrow_mut().write(sys, (), value as u8)
+                    );
+                }
 
                 // TX is complete immediately in this minimal model.
                 self.sr |= USART_SR_TXE | USART_SR_TC;
@@ -104,6 +112,48 @@ impl Peripheral for Usart {
             0x0014 => self.cr3 = value,
             0x0018 => self.gtpr = value,
             _ => {}
+        }
+    }
+
+    fn read_dma(&mut self, sys: &System, offset: u32, size: usize) -> VecDeque<u8> {
+        // DMA reads should use the batched ext_device path to avoid per-byte virtual-call overhead.
+        let mut result = VecDeque::with_capacity(size);
+
+        if offset == 0x0004 && (self.cr3 & USART_CR3_DMAR) != 0 {
+            if let Some(dev) = &self.ext_device {
+                for byte in dev.borrow_mut().read_batch(sys, (), size) {
+                    result.push_back(byte);
+                }
+            } else {
+                for _ in 0..size {
+                    result.push_back(self.dr as u8);
+                }
+            }
+
+            self.sr &= !(1 << 5);
+        } else {
+            return super::Peripheral::read_dma(self, sys, offset, size);
+        }
+
+        result
+    }
+
+    fn write_dma(&mut self, sys: &System, offset: u32, mut value: VecDeque<u8>) {
+        if offset == 0x0004 && (self.cr3 & USART_CR3_DMAT) != 0 {
+            if let Some(dev) = &self.ext_device {
+                let bytes = value.make_contiguous();
+                if let Some(last) = bytes.last().copied() {
+                    self.dr = last as u32;
+                }
+                dev.borrow_mut().write_batch(sys, (), bytes);
+            } else if let Some(last) = value.back().copied() {
+                self.dr = last as u32;
+            }
+
+            self.sr |= USART_SR_TXE | USART_SR_TC;
+            trace!("{} dma_write {} bytes", self.name, value.len());
+        } else {
+            super::Peripheral::write_dma(self, sys, offset, value);
         }
     }
 }

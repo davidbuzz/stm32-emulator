@@ -38,7 +38,14 @@ Repository guidance for AI coding agents working in this project.
   - ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
 - Run CubeBlack long validation and capture evidence log:
   - cd cubeblack
-  - /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000 2>&1 | tee ardu.cubeblack.log
+  - (
+      /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
+        ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000
+    ) > ardu.cubeblack.log 2>&1 & pid=$!; \
+    for _ in $(seq 120); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done; \
+    kill -9 "$pid" 2>/dev/null || true; \
+    wait "$pid" 2>/dev/null || true; \
+    tail -40 ardu.cubeblack.log
 - Detect tight loops:
   - ../target/release/stm32-emulator config.yaml -v --busy-loop-stop
 - `cubeblack/run.sh` should remain aligned with the long validation command above and must refresh `cubeblack/ardu.cubeblack.log` on each long-run execution.
@@ -46,18 +53,19 @@ Repository guidance for AI coding agents working in this project.
 ## Execution budgeting
 
 - Prefer wrapping emulator runs with `/usr/bin/time` so validation reports include wall-clock cost.
-- Prefer `timeout` for exploratory probes that may not terminate promptly.
+- Prefer `timeout` for simple exploratory probes that are not being piped through log-capture helpers.
+- For long validation runs where the stop must be an exact wall-clock cutoff and output is being redirected or tailed, use a background PID plus explicit `sleep`/`kill -9` rather than relying on `timeout` inside a pipeline.
 - Current measured runtimes on this workspace state:
   - `--max-instructions 3000000` completes in about `1.3s`
   - `--max-instructions 120000000` completes in about `47s`
   - `--busy-loop-stop` did not converge quickly in one probe and was cut off at `30s` / about `70.9M` instructions
 - Practical defaults:
   - short bounded runs: `timeout 30`
-  - longer bounded validation runs up to `120000000` instructions: `timeout 120`
+  - longer bounded validation runs up to `120000000` instructions: explicit 120-second PID kill
   - `--busy-loop-stop` and other open-ended probes: always wrap in `timeout 30` unless there is a specific reason not to
 - Recommended command forms:
   - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000`
-  - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000 2>&1 | tee ardu.cubeblack.log`
+  - `cd cubeblack && ( /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000 ) > ardu.cubeblack.log 2>&1 & pid=$!; for _ in $(seq 120); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done; kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; tail -40 ardu.cubeblack.log`
   - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop`
 - The long validation run is expected to leave behind `cubeblack/ardu.cubeblack.log` as the evidence artifact for that checkpoint.
 - Commit updated `cubeblack/ardu.cubeblack.log` regularly alongside meaningful emulator progress so git history preserves the observed runtime evidence over time.
