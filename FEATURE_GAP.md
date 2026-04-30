@@ -10,9 +10,9 @@
 | USART Implement UART USART interrupt generation and clearing rules. | high | done | TXEIE and TCIE trigger NVIC pending via IRQ looked up from DeviceMeta with STM32F427 fallback table. |
 | SPI Implement stateful SPI status flags instead of synthetic toggles. | high | done | rxne bool state: clears on DR read, sets on DR write. TXE always=1. CR2 now readable. OVR MODF BSY still static. |
 | SPI Implement SPI DMA request generation for RX and TX. | high | done | DMA fires when stream EN=1 and PAR points to SPI DR; read_dma/write_dma hooks handle full-duplex exchange. TXDMAEN/RXDMAEN in CR2 gated correctly. |
-| RCC Replace always-ready RCC behavior with stateful transitions for CR CFGR and oscillator and PLL paths. | high | open | Remove hidden firmware bypass dependence. |
-| RCC Implement effective bus and clock configuration impacts on peripheral timing. | high | open | Affects UART TIM and DMA pacing assumptions. |
-| USB OTG FS remains partial for full CDC-accurate endpoint FIFO and interrupt behavior. | high | open | Further USB behavior depth still needed. |
+| RCC Replace always-ready RCC behavior with stateful transitions for CR CFGR and oscillator and PLL paths. | high | done | update_cr_ready_bits mirrors HSI HSE PLL PLLI2S PLLSAI ON→RDY. update_cfgr_status_bits mirrors SW→SWS. BDCR and CSR LSE LSI same pattern. Boot loop no longer depends on bypass. |
+| RCC Implement effective bus and clock configuration impacts on peripheral timing. | medium | open | Affects UART baud-rate accuracy and TIM prescaler alignment. Not a gate for CubeBlack boot; reduces timing accuracy. |
+| USB OTG FS remains partial for full CDC-accurate endpoint FIFO and interrupt behavior. | medium | partially implemented | Full synthetic enumeration: USBRST ENUMDNE SOF EP0 SETUP ZLP SET_ADDRESS SET_CONFIG CDC ACM handshake. EP1 bulk IN TXFE path captures console output. FIFO threshold semantics and non-enumeration OUT transfer handling remain. |
 | USART Implement baud-rate effects from BRR for timing assumptions. | medium | open | Timing-sensitive firmware may depend on BRR effects. |
 | SPI Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | open | Needed by CubeBlack peripheral behavior. |
 | SPI Implement SPI error and interrupt signaling paths. | medium | open | Needs RXNE TXE and ERR interrupt behavior. |
