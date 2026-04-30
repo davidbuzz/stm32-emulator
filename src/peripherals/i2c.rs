@@ -9,7 +9,7 @@
 // Still incomplete: real slave device hooks, DMA requests beyond basic DR access, and full IRQ/error fidelity.
 // Datasheet/reference anchor: STM32F4 RM I2C chapter.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::system::System;
 use super::{meta::DeviceMeta, Peripheral};
@@ -34,6 +34,15 @@ pub struct I2c {
     sr1_read_armed_for_addr_clear: bool,
     pending_event_irq: Option<u8>,
     pending_error_irq: Option<u8>,
+    active_addr: Option<u8>,
+    slaves: HashMap<u8, I2cSlave>,
+}
+
+#[derive(Clone)]
+struct I2cSlave {
+    regs: [u8; 256],
+    pointer: u8,
+    expecting_register: bool,
 }
 
 impl I2c {
@@ -71,6 +80,8 @@ impl I2c {
             sr1_read_armed_for_addr_clear: false,
             pending_event_irq: None,
             pending_error_irq: None,
+            active_addr: None,
+            slaves: default_i2c_slaves(name),
         }))
     }
 
@@ -80,6 +91,7 @@ impl I2c {
         self.sr1_read_armed_for_addr_clear = false;
         self.sr1 &= !(I2C_SR1_SB | I2C_SR1_ADDR | I2C_SR1_ADD10 | I2C_SR1_BTF | I2C_SR1_RXNE | I2C_SR1_TXE);
         self.sr2 &= !(I2C_SR2_MSL | I2C_SR2_BUSY | I2C_SR2_TRA);
+        self.active_addr = None;
     }
 
     fn reset(&mut self) {
@@ -99,6 +111,7 @@ impl I2c {
         self.sr1_read_armed_for_addr_clear = false;
         self.pending_event_irq = None;
         self.pending_error_irq = None;
+        self.active_addr = None;
     }
 
     fn begin_start(&mut self) {
@@ -119,10 +132,12 @@ impl I2c {
     }
 
     fn ack_address(&mut self, addr_byte: u8) {
+        let addr_7bit = addr_byte >> 1;
         self.awaiting_address = false;
         self.awaiting_addr_clear = true;
         self.sr1_read_armed_for_addr_clear = false;
         self.last_addr_was_read = (addr_byte & 1) != 0;
+        self.active_addr = Some(addr_7bit);
 
         self.cr1 &= !I2C_CR1_START;
         self.sr1 &= !(I2C_SR1_SB | I2C_SR1_ADD10 | I2C_SR1_AF | I2C_SR1_BTF | I2C_SR1_RXNE);
@@ -132,9 +147,14 @@ impl I2c {
         if self.last_addr_was_read {
             self.sr2 &= !I2C_SR2_TRA;
             self.sr1 &= !I2C_SR1_TXE;
+            self.prepare_read_byte();
         } else {
             self.sr2 |= I2C_SR2_TRA;
             self.sr1 |= I2C_SR1_TXE;
+            self.sr1 &= !I2C_SR1_RXNE;
+            if let Some(slave) = self.slaves.get_mut(&addr_7bit) {
+                slave.expecting_register = true;
+            }
         }
 
         self.pending_event_irq = Some(1);
@@ -154,6 +174,38 @@ impl I2c {
         self.sr1 |= I2C_SR1_TXE | I2C_SR1_BTF;
         self.pending_event_irq = Some(0);
     }
+
+    fn prepare_read_byte(&mut self) {
+        if let Some(addr) = self.active_addr {
+            if let Some(slave) = self.slaves.get_mut(&addr) {
+                self.dr = slave.regs[slave.pointer as usize] as u32;
+                slave.pointer = slave.pointer.wrapping_add(1);
+                self.sr1 |= I2C_SR1_RXNE;
+                return;
+            }
+        }
+
+        self.dr = 0;
+        self.sr1 |= I2C_SR1_RXNE;
+    }
+
+    fn handle_data_write(&mut self, value: u8) {
+        let Some(addr) = self.active_addr else {
+            return;
+        };
+        let Some(slave) = self.slaves.get_mut(&addr) else {
+            return;
+        };
+
+        if slave.expecting_register {
+            slave.pointer = value;
+            slave.expecting_register = false;
+            return;
+        }
+
+        slave.regs[slave.pointer as usize] = value;
+        slave.pointer = slave.pointer.wrapping_add(1);
+    }
 }
 
 impl Peripheral for I2c {
@@ -164,10 +216,17 @@ impl Peripheral for I2c {
             0x0008 => self.oar1,
             0x000c => self.oar2,
             0x0010 => {
+                let value = self.dr;
+
+                if self.last_addr_was_read && self.active_addr.is_some() {
+                    self.prepare_read_byte();
+                    self.sr1 |= I2C_SR1_BTF;
+                }
+
                 if (self.sr1 & I2C_SR1_BTF) != 0 && (self.sr1 & I2C_SR1_RXNE) == 0 {
                     self.sr1 &= !I2C_SR1_BTF;
                 }
-                self.dr
+                value
             }
             0x0014 => {
                 if self.awaiting_addr_clear && (self.sr1 & (I2C_SR1_ADDR | I2C_SR1_ADD10)) != 0 {
@@ -222,13 +281,15 @@ impl Peripheral for I2c {
                 self.dr = value & 0xff;
                 if self.awaiting_address {
                     let addr = self.dr as u8;
-                    if addr == 0 {
-                        trace!("{} address phase addr=0x{:02x}: synthetic NACK", self.name, self.dr);
+                    let addr_7bit = addr >> 1;
+                    if !self.slaves.contains_key(&addr_7bit) {
+                        trace!("{} address phase addr=0x{:02x}: no board hook, NACK", self.name, self.dr);
                         self.nack_address();
                     } else {
                         self.ack_address(addr);
                     }
                 } else {
+                    self.handle_data_write((value & 0xff) as u8);
                     self.sr1 |= I2C_SR1_TXE;
                 }
             }
@@ -275,7 +336,20 @@ impl Peripheral for I2c {
         self.pending_event_irq = Some(0);
 
         let mut out = VecDeque::with_capacity(size);
-        out.extend(std::iter::repeat(0u8).take(size));
+        if self.last_addr_was_read {
+            if let Some(addr) = self.active_addr {
+                if let Some(slave) = self.slaves.get_mut(&addr) {
+                    for _ in 0..size {
+                        out.push_back(slave.regs[slave.pointer as usize]);
+                        slave.pointer = slave.pointer.wrapping_add(1);
+                    }
+                }
+            }
+        }
+
+        while out.len() < size {
+            out.push_back(0);
+        }
         out
     }
 
@@ -288,6 +362,34 @@ impl Peripheral for I2c {
             self.dr = last as u32;
         }
         self.schedule_btf_event();
+    }
+}
+
+fn default_i2c_slaves(_name: &str) -> HashMap<u8, I2cSlave> {
+    let mut slaves = HashMap::new();
+
+    // Common CubeBlack bring-up probe targets on external I2C paths.
+    slaves.insert(0x1e, make_slave(&[(0x0A, b'H'), (0x0B, b'4'), (0x0C, b'3')]));
+    slaves.insert(0x0e, make_slave(&[(0x00, 0x10)]));
+    slaves.insert(0x0c, make_slave(&[(0x00, 0x48), (0x01, 0x09)]));
+    slaves.insert(0x76, make_slave(&[(0xD0, 0x58)]));
+    slaves.insert(0x77, make_slave(&[(0xD0, 0x58)]));
+    slaves.insert(0x68, make_slave(&[(0x75, 0x71)]));
+    slaves.insert(0x69, make_slave(&[(0x75, 0x71)]));
+
+    slaves
+}
+
+fn make_slave(seed: &[(u8, u8)]) -> I2cSlave {
+    let mut regs = [0u8; 256];
+    for (reg, value) in seed {
+        regs[*reg as usize] = *value;
+    }
+
+    I2cSlave {
+        regs,
+        pointer: 0,
+        expecting_register: true,
     }
 }
 
