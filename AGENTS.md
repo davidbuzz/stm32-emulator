@@ -152,6 +152,7 @@ If you also intend to refresh the bootloader image used by the emulator, copy `b
 
 ## Todo list requirements
 
+- For any non-trivial CubeBlack/emulator workstream in this repo, always keep a repo TODO list.
 - When maintaining a TODO list for work in this repo, always end it with these final items in this order:
   - `git commit your changes, assess all un-comitted changes, not just your recent edits`
   - `refer to FEATURE_GAP.md afterwards to get more work to do`

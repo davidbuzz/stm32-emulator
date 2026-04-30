@@ -83,7 +83,9 @@ impl ExtDevice<(), u8> for Ramtron {
 
     fn read(&mut self, _sys: &System, _addr: ()) -> u8 {
         match &mut self.state {
-            State::SendingReply(data) => data.pop_front().unwrap_or(0xFF),
+            State::SendingReply(data) => {
+                data.pop_front().unwrap_or(0xFF)
+            }
             State::ReadData { addr } => {
                 let v = self.storage[*addr % RAMTRON_SIZE];
                 *addr = (*addr + 1) % RAMTRON_SIZE;

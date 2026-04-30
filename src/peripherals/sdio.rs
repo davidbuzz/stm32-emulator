@@ -143,6 +143,11 @@ impl Sdio {
             _ => false,
         }
     }
+    fn maybe_raise_irq(&self, sys: &System) {
+        if (self.sta & self.mask) != 0 {
+            sys.p.nvic.borrow_mut().set_intr_pending(SDIO_IRQ_NUMBER);
+        }
+    }
 }
 
 impl Peripheral for Sdio {
@@ -190,6 +195,7 @@ impl Peripheral for Sdio {
                 if value & CMD_CPSMEN != 0 {
                     let cmd = value & 0x3F;
                     if self.handle_known_command(cmd) {
+                        self.maybe_raise_irq(_sys);
                         debug!(
                             "SDIO CMD=0x{:02x} arg=0x{:08x} → sta=0x{:08x}",
                             cmd,
@@ -201,8 +207,9 @@ impl Peripheral for Sdio {
                         if waitresp == 0 {
                             self.respcmd = cmd;
                             self.sta |= STA_CMDSENT;
+                            self.maybe_raise_irq(_sys);
                         } else {
-                            self.sta |= STA_CMDSENT | STA_CTIMEOUT;
+                            self.sta |= STA_CTIMEOUT;
                             if !self.is_ejected {
                                 self.failed_retries = self.failed_retries.saturating_add(1);
                             }
@@ -213,6 +220,7 @@ impl Peripheral for Sdio {
                                     self.failed_retries
                                 );
                             }
+                            self.maybe_raise_irq(_sys);
                         }
                         debug!(
                             "SDIO{} CMD=0x{:02x} arg=0x{:08x} waitresp={} retries={} → sta=0x{:08x}",

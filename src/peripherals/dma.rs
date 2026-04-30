@@ -215,13 +215,30 @@ impl Peripheral for Dma {
                     let channel = ((value >> 25) & 0b111) as u8;
                     let par = self.streams[i].par;
                     if let Some(owner) = self.find_request_conflict(i, channel, par) {
+                        // Allow a read/write stream pair to share the same peripheral request.
+                        // This is the normal SPI full-duplex DMA pattern (RX + TX streams).
+                        let new_dir = match (value >> 6) & 0b11 {
+                            0b00 => Dir::Read,
+                            0b01 => Dir::Write,
+                            0b10 => Dir::MemCopy,
+                            _ => Dir::Invalid,
+                        };
+                        let owner_dir = self.streams[owner].dir();
+                        let full_duplex_pair =
+                            (new_dir == Dir::Read && owner_dir == Dir::Write)
+                            || (new_dir == Dir::Write && owner_dir == Dir::Read);
+                        if full_duplex_pair {
+                            self.streams[i].write(&self.name, i, sys, offset, value);
+                            return;
+                        }
+
                         let new_pl = ((value >> 16) & 0b11) as u8;
                         let owner_pl = self.streams[owner].priority();
 
                         if new_pl > owner_pl {
                             self.streams[owner].cr &= !1;
                             self.streams[owner].deferred_usart_rx = false;
-                            warn!(
+                            debug!(
                                 "{} stream={} preempted stream={} on conflicting request channel={} par=0x{:08x} (pl {} > {})",
                                 self.name,
                                 i,
@@ -233,7 +250,7 @@ impl Peripheral for Dma {
                             );
                         } else {
                             self.signal_mode_error(sys, i);
-                            warn!(
+                            debug!(
                                 "{} stream={} blocked conflicting request channel={} par=0x{:08x} (pl {} <= {})",
                                 self.name,
                                 i,

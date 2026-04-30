@@ -15,6 +15,7 @@ use super::Peripheral;
 use crate::ext_devices::ExtDevices;
 
 use std::{rc::Rc, cell::RefCell};
+use std::collections::VecDeque;
 
 #[derive(Default)]
 pub struct Spi {
@@ -24,9 +25,9 @@ pub struct Spi {
     pub rx_buffer: u32,
     pub ready_toggle: bool,
     pub ext_device: Option<Rc<RefCell<dyn ExtDevice<(), u8>>>>,
-    /// Pending RX DMA destination address: set when read_dma fires (RX DMA),
-    /// consumed in write_dma (TX DMA) to patch the RAM with real MISO bytes.
-    pending_rx_dest: Option<u32>,
+    /// Pending RX DMA destination addresses collected during RX DMA bursts.
+    /// TX DMA consumes these addresses and patches RAM with real MISO bytes.
+    pending_rx_dest: VecDeque<u32>,
 }
 
 impl Spi {
@@ -49,7 +50,7 @@ impl Spi {
 
 impl Peripheral for Spi {
     fn set_dma_rx_dest(&mut self, dest_addr: u32) {
-        self.pending_rx_dest = Some(dest_addr);
+        self.pending_rx_dest.push_back(dest_addr);
     }
 
     /// For full-duplex DMA (TXDMAEN set in CR2), the RX DMA fires first.
@@ -79,7 +80,7 @@ impl Peripheral for Spi {
     /// the ext_device first (one byte behind, matching real SPI timing), then write MOSI.
     /// If a pending RX DMA destination was set by set_dma_rx_dest, patch that RAM location
     /// with the collected MISO bytes so the firmware sees the correct response.
-    fn write_dma(&mut self, sys: &System, offset: u32, mut value: std::collections::VecDeque<u8>) {
+    fn write_dma(&mut self, sys: &System, offset: u32, value: std::collections::VecDeque<u8>) {
         if offset != 0x000C {
             return;
         }
@@ -92,9 +93,14 @@ impl Peripheral for Spi {
             }
             rx
         }).collect();
-        if let Some(dest) = self.pending_rx_dest.take() {
-            if let Err(e) = sys.uc.borrow_mut().mem_write(dest.into(), &rx_bytes) {
-                warn!("{} DMA full-duplex patch failed dest=0x{:08x}: {}", self.name, dest, UniErr(e));
+        if !self.pending_rx_dest.is_empty() {
+            for rx in rx_bytes.iter().copied() {
+                let Some(dest) = self.pending_rx_dest.pop_front() else {
+                    break;
+                };
+                if let Err(e) = sys.uc.borrow_mut().mem_write(dest.into(), &[rx]) {
+                    warn!("{} DMA full-duplex patch failed dest=0x{:08x}: {}", self.name, dest, UniErr(e));
+                }
             }
         } else {
             // No pending RX DMA: update rx_buffer with the last received byte (polling compat)
