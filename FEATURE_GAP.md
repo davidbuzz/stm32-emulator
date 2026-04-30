@@ -1,227 +1,129 @@
-# Feature Gap
-
-This file tracks emulator features that are known to be incomplete or not yet implemented.
-
-## Current deliverable
-
-- End goal: get the CubeBlack target to boot and run ArduPilot firmware under the emulator with realistic emulator-side behavior, rather than relying on firmware-side startup bypasses.
-- This document is the primary backlog and technical handover for work that remains between the current emulator state and that deliverable.
-- Prefer items that unblock demonstrable CubeBlack boot progress first, then follow-on correctness and hardware coverage work.
-- Priority values used in item tables: `high` = active ArduPilot runtime blockers only, `medium` = useful but not immediate blockers, `low` = defer until proven needed.
-
-## Concrete success marker
-
-Consider the CubeBlack/ArduPilot deliverable achieved only when all of the following are satisfied:
-
-- Run `cd cubeblack && ../target/release/stm32-emulator config.yaml -v --max-instructions 100000000` and finish with no `WARN`, no `ERROR`, and no `peri=????` unknown peripheral accesses.
-- Confirm the `0x08161148` idle-loop probe is not terminal by showing at least one wakeup path (`TIM5` IRQ 50 pending/dispatch/return) in a traced run.
-- Capture at least one recognizable firmware runtime marker (for example USART-probe output) or another deterministic runtime milestone and document it in this file.
-- Record commands, final instruction count/stop reason, and why the captured marker proves active runtime progress instead of a passive loop.
-
-## Recently Fixed Items
-
-| Feature | Priority | Status | Notes/Technical Issues |
-| --- | --- | --- | --- |
-| CubeBlack target bring-up assets and board configuration | medium | Implemented | Added in commit `f46e695`. This introduced the initial CubeBlack board files, firmware artifacts, `cubeblack/config.yaml`, `run.sh`, and STM32F427 SVD so the emulator could target CubeBlack at all. |
-| CubeBlack bootloader artifact rebuilt for oscillator configuration change | medium | Implemented | Added in commit `5797f0f`. The commit message says the upstream hardware definition changed `OSCILLATOR_HZ` to `0`; in this repo the concrete result is an updated `cubeblack/CubeBlack_bl.hex` artifact used by the emulator. |
-| Historical startup bypass retired from the active path | medium | Updated | Commit `377a746` introduced a temporary ArduPilot-side startup workaround for RCC, PWR, FLASH, PLL, and oscillator wait loops. That patch file is no longer kept in this repo; current progress should be evaluated against the emulator-side peripheral readiness models and current validation evidence instead of treating a firmware-side bypass as the active mechanism. |
-
-## Current Session Implemented Items
-
-| Feature | Priority | Status | Notes/Technical Issues |
-| --- | --- | --- | --- |
-| CubeBlack memory map updated for CCM RAM and system memory | medium | Implemented | `cubeblack/config.yaml` now maps `RAM-CCM` at `0x10000000` and `SYSMEM` at `0x1FFF0000`, removing earlier unmapped accesses in valid STM32F427 regions. |
-| STM32 unique ID bytes patched into system memory | medium | Implemented | `cubeblack/config.yaml` now injects a 12-byte UID payload at `0x1FFF7A10`, covering firmware reads from the STM32 device identifier area. |
-| SPI2 FRAM (FM25V02) device emulation | high | Implemented | Device model in `src/ext_devices/ramtron.rs` with 32KB storage, complete SPI command state machine (RDID/0x9F, READ/0x03, WRITE/0x02, WREN/0x06, WRDI/0x04, RDSR/0x05), GPIO PD10 CS callback; full-duplex DMA bridge fix in `src/peripherals/spi.rs` (CR2 tracking, TXe anEN-gated `read_dma` returns empty for full-duplex, `write_dma` performs per-byte exchange and patches RX dest RAM). RDID returns correct id1=0x22/id2=0x00 and firmware reads all 32KB storage successfully. |
-| DMA global register decode corrected | medium | Implemented | `src/peripherals/dma.rs` now treats `0x00..0x0f` as `LISR/HISR/LIFCR/HIFCR` and starts stream register decode at `0x10 + n*0x18`, fixing the previous misdecode. |
-| DMA transfer-complete flag and clear semantics added | medium | Implemented | `src/peripherals/dma.rs` now tracks `lisr`/`hisr`, sets `TCIF` on completed transfers, and clears flags via `LIFCR`/`HIFCR`, matching the STM32F4 polling model more closely. |
-| NVIC stack-pointer restore and IPSR numbering fixed | medium | Implemented | `src/peripherals/nvic.rs` now writes back the selected stack pointer register (`MSP` or `PSP`) instead of always `SP`, and writes architectural exception numbers into `IPSR` using `16 + irq`. |
-| Minimal general/basic TIM timebase added | medium | Partially Implemented | `src/peripherals/tim.rs` provides a small stub for `TIM5`, `TIM6`, and `TIM7` with `CR1`, `DIER`, `SR`, `CNT`, `PSC`, `ARR`, and `CCR1`. This is enough for some polling and timeout loops, but it is not a full advanced TIM implementation. |
-| Core SCB state and dynamic VTOR handling added | medium | Partially Implemented | `src/peripherals/scb.rs` now exposes basic Cortex-M4 `SCB` state including `CPUID`, `ICSR`, `VTOR`, `AIRCR`, `SHPRx`, and fault-status registers, while `src/peripherals/nvic.rs` now dispatches exceptions through the active `VTOR` instead of a fixed config-time vector table address. Fault-status registers are stored but have no behavioral effect; SHPRx priority values are not used in arbitration. |
-| Minimal CoreDebug and DWT cycle-counter support added | medium | Partially Implemented | `src/peripherals/core_debug.rs` now models `DEMCR`, `DWT_CTRL`, and `DWT_CYCCNT`, allowing firmware to enable tracing and read a monotonically increasing cycle counter instead of seeing hard-zero values and unknown MMIO accesses during startup. |
-| DMA stream TC interrupt signaling to NVIC added | medium | Partially Implemented | `src/peripherals/dma.rs` now raises the mapped STM32F427 DMA stream IRQ pending in NVIC on transfer-complete when `TCIE` is set, in addition to `TCIF` status-bit updates. This closes the gap where completion was only visible via `LISR/HISR`, but request-line driven transfers and broader HT/TE signaling remain incomplete. |
-| Minimal OTG FS global/device bring-up added | high | Partially Implemented | `src/peripherals/otg_fs.rs` now handles `OTG_FS_GLOBAL`, `OTG_FS_DEVICE`, and `OTG_FS_PWRCLK` with persisted core registers, minimal `GRSTCTL` idle/reset semantics, a synthetic device-event sequence (`USBRST`, `ENUMDNE`, periodic `SOF`) that raises the real `OTG_FS` IRQ 67, and enough EP0 endpoint bookkeeping to latch `DIEPEMPMSK`, deliver a one-shot setup packet, and raise the zero-length IN `XFRC` completion the firmware expects during early control-transfer bring-up. FIFO payload semantics and any CDC data bridge are still unmodeled. |
-| Exception-frame sizing and BASEPRI-aware IRQ gating corrected | high | Implemented | `src/peripherals/nvic.rs` now includes the reserved word required for Cortex-M4F extended FP exception frames and blocks external IRQ dispatch while `BASEPRI` is nonzero. This removed the late scheduler corruption that previously let the ready-list sentinel be selected as a thread and eliminated the `FETCH_UNMAPPED addr=0x00010002` crash at about `10.64M` instructions. |
-| Free-running TIM stepping and TIM5 compare wakeup fixed | medium | Implemented | Timers now advance from the emulator main loop instead of only on MMIO access, and `src/peripherals/tim.rs` preserves prescaler remainder across steps. This allows the firmware-configured `TIM5` compare interrupt to fire after the initial idle-loop park, which was previously impossible because the counter froze once the firmware stopped polling it. |
-| Minimal RCC startup status model added | high | Partially Implemented | `src/peripherals/rcc.rs` now persists core clock-control state instead of returning fixed stub values. `CR` ready bits (`HSIRDY`, `HSERDY`, `PLLRDY`, `PLLI2SRDY`, `PLLSAIRDY`) are synthesized from enable bits, `CFGR.SWS` mirrors `SW`, `CSR.LSIRDY` mirrors `LSION`, and `BDCR.LSERDY` mirrors `LSEON` with basic backup-domain reset handling. This removes the early ChibiOS `stm32_clock_init()` stalls on HSI/HSE/PLL/LSI/LSE readiness, though detailed clock-tree timing effects remain unmodeled. |
-| Minimal PWR regulator-ready model added | high | Partially Implemented | `src/peripherals/pwr.rs` now models `CR`/`CSR` well enough for ChibiOS startup polling, including immediate `VOSRDY`, `ODRDY`, and `ODSWRDY` semantics. This clears the F4 voltage-regulator waits during PLL bring-up without attempting full PWR behavior. |
-| Minimal FLASH ACR model added | high | Partially Implemented | `src/peripherals/flash.rs` now stores `FLASH->ACR` and related control registers so the ChibiOS flash-latency programming loop can observe its own writeback. This removes the previous startup stall at the `FLASH_ACR_LATENCY_Msk` check. |
-| Busy-loop diagnostic capture added | medium | Implemented | `src/emulator.rs` now logs `PC`, `SP`, `LR`, `R0-R7`, context words, and the restore frame when `--busy-loop-stop` triggers, which made the current scheduler hand-off failure traceable. |
-| USART probe line flushing improved | medium | Implemented | `src/ext_devices/usart_probe.rs` now flushes on both CR and LF and also flushes long buffered output, improving visibility of firmware text output during boot debugging. |
-| USART register state persistence expanded | medium | Partially Implemented | `src/peripherals/usart.rs` now stores and returns `SR`, `DR`, `BRR`, `CR1`, `CR2`, `CR3`, and `GTPR` state, including `CR3` `DMAT/DMAR` bits needed for DMA-coupled configuration paths, and preserves `SR.TXE`/`SR.TC` across firmware `SR=0` init writes so CubeBlack no longer sees a permanently non-ready transmitter. Full interrupt and state-machine accurate USART behavior is still pending. |
-| Deferred external IRQ delivery avoids mixed thread/handler execution state | high | Implemented | `src/emulator.rs` now defers pending external IRQ delivery until Unicorn stops the current execution block, and `src/peripherals/nvic.rs` exposes `take_pending_interrupt()` so the emulator can inject the vector on the next resume boundary instead of mutating CPU exception state mid-block. This fixes the deterministic late crash at about `145255239` instructions where `TIM5` IRQ 50 could land while firmware was inside the `IT` block in `ChibiOS::Scheduler::in_main_thread()`, previously leading to a bogus `pop {r3,pc}` from MSP fill memory and `pc=0x55555554`. |
-| CubeBlack run script hardened for local environments | medium | Implemented | `cubeblack/run.sh` now sources Cargo environment when present and falls back to the built release binary, reducing local setup friction. |
-
-## Current Handover Blockers
-
-| Feature | Priority | Status | Notes/Technical Issues |
-| --- | --- | --- | --- |
-| Implement GDB remote debugging support (`gdb.rs` / `--gdb`) | high | Implemented | The emulator now exposes a GDB remote stub via `src/gdb.rs` and the `--gdb <port>` CLI option, allowing `arm-none-eabi-gdb`/`gdb-multiarch` to attach with `--nx`, inspect registers and memory, set breakpoints, single-step, continue, and halt at firmware symbols such as `main`. |
-| `--busy-loop-stop` now ignores transient idle waits and follows timer wakeups | high | Implemented | `src/emulator.rs` now requires a sustained repeated-PC streak (`BUSY_LOOP_STREAK_THRESHOLD`) before halting, so the probe no longer trips on the first idle-thread wait loop. Revalidated with `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop`: the run continues past the early `0x0815ca54` idle wait and logs repeated `TIM5` IRQ 50 compare/disptach activity instead of stopping immediately. |
-| Runtime now reaches 200M cleanly after deferred IRQ delivery fix | high | Updated | The old deterministic late crash at `clk=145255239` is gone. Short validation still succeeds with `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000`, ending at `pc=0x0815ca54` in about `1.66s`. Longer bounded validation now also succeeds with `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 200000000`, reaching `clk=200000000 pc=0x0815ca54` in about `117.39s` with no emulator `WARN`, no emulator `ERROR`, and no `peri=????`. The remaining visible output in `cubeblack/ardu.cubeblack.log` is dominated by expected `DEBUG` timer/USB activity rather than fatal faults. |
-| USB OTG FS RXFLVL/GRXSTSP enumeration sequence completed | high | Implemented | `src/peripherals/otg_fs.rs` now delivers the full synthetic USB enumeration sequence: PKTSTS=6 (setup data) → FIFO reads → PKTSTS=4 (setup complete) → DOEPINT0.STUP|XFRC → EP0 IN ZLP XFRC. Both `SET_ADDRESS 1` and `SET_CONFIGURATION 1` are delivered and acknowledged. Fixed: (1) continuous RXFLVL re-assertion in step() to re-fire IRQ between PKTSTS=6 and PKTSTS=4 pops; (2) `irq_latched` forced false after STUP fires so OEPINT triggers a fresh IRQ for the SETUP callback. After successful enumeration, `enum_stage=Configured` and the firmware proceeds to runtime operation. |
-| First ArduPilot console line captured over USB CDC | high | Implemented | The emulator captures CDC bulk IN traffic from EP1 via the TXFE-interrupt-driven path. ChibiOS sets DIEPEMPMSK after EPENA (not before), so XFRC is now gated on `ep_txfe_was_fired` to avoid racing XFRC against the firmware filling the FIFO. Confirmed at clk=`10615187`/`10615218`: `USB-CDC ep1 'Unab'` + `'le to init RAMTRON storage'` (split across two USB packets by ChibiOS TXFE fill loop). Messages recur throughout the run. |
-| SPI2 RAMTRON full-duplex DMA bridge | high | Implemented | Root cause and core fix are now complete: ChibiOS `spiStartExchangeI` with in-place buffer (send==recv) had RX DMA clobbering TX source bytes before TX DMA consumed them. `read_dma()` returns empty for SPI DR in TXDMAEN full-duplex mode, `write_dma()` performs the exchange, and SPI now queues/pairs all pending RX DMA destinations so every received byte is patched into the correct RAM address. CR2 tracking for TXDMAEN/RXDMAEN remains in place. Revalidated with `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000`: run reached `clk=120000000` and no longer emitted USB CDC `Unable to init RAMTRON storage` / `Unknown RAMTRON device` lines. |
-| SDIO peripheral stub added (CMDSENT unblock) | high | Partially Implemented | Firmware at PC=0x08155f76 polls SDIO_STA (0x40012C00+0x34) bit 7 (CMDSENT) after writing CMD register with CPSMEN. Added `src/peripherals/sdio.rs`: minimal SDIO model that sets CMDSENT immediately on CMD write (no-response commands), and CMDSENT+CTIMEOUT for commands expecting a response (no card present). This unblocked the previous infinite spin at 0x08155f78. SD card init now proceeds but fails gracefully via CTIMEOUT on all ACMD41 attempts. Outstanding: SDIO DMA/interrupt path, data transfer registers are stubs; SD_INIT_RETRY=100 retries × 10ms osalThreadSleepMilliseconds each = ~167M instructions per sdcConnect failure; 3 sdcConnect attempts = ~500M instructions before firmware gives up on SD and resumes other init. |
-| CubeBlack board-validation sensor stubs | high | Implemented | `src/ext_devices/spi_sensors.rs` provides the board-validation responses ArduPilot expects before normal driver init: `WhoAmIDevice` satisfies `spi_check_register(...)` and `Ms5611Device` satisfies `check_ms5611(...)` with RESET + PROM/CRC behavior. The generated `HAL_VALIDATE_BOARD` in `cubeblack/hwdef.h` currently covers the two MS5611 baros plus the external and internal IMU presence predicates, and a failure would trap startup in `AP_BoardConfig::config_error(...)`. Current long validation runs proceed far beyond that stage and emit later USB CDC runtime lines such as `Unable to init RAMTRON storage` / `Unknown RAMTRON device` from `cubeblack/ardu.cubeblack.log`, so board validation is no longer a startup blocker. |
-| CoreDebug/DWT coverage is still minimal | medium | Partially Implemented | The emulator now handles `DEMCR`, `DWT_CTRL`, and `DWT_CYCCNT`, which removes the earlier unknown accesses and hard-zero startup reads. The remaining gap is breadth: the wider DWT/CoreDebug register set and any debug-trigger side effects are still unmodeled. |
-| ADC peripheral stub (ADC1/2/3) | medium | Partially Implemented | `src/peripherals/adc.rs` (new file) models ADC1, ADC2, ADC3. SR.EOC always asserted; DR returns synthetic `0x0800` (12-bit half-scale ≈ 1.65V on 3.3V rail → ≈16.5V battery via typical 10:1 divider). `read_dma()` overrides the default to emit correct little-endian halfwords for PSIZE=2 DMA bursts (default `read_dma` truncates to `u8`, losing the high byte). CR2 SWSTART sets EOC. Watchdog threshold reset value (`htr=0x0FFF`) included. Registered in `src/peripherals/mod.rs`. |
-| USART SR realistic RXNE transitions | low | Implemented | `src/peripherals/usart.rs` initial SR changed from `TXE+TC+RXNE+IDLE` to `TXE+TC+IDLE` (bit 5 RXNE removed). DR read now explicitly clears RXNE (`self.sr &= !(1 << 5)`). Removes spurious "byte ready" signals to firmware when no incoming data is present. |
-| I2C master transaction/state sequencing (EV5/EV6/EV8_2 baseline) | medium | Partially Implemented | `src/peripherals/i2c.rs` now implements a minimal ChibiOS-facing master state machine: START sets `SB`, address phase sets `ADDR` with transfer-direction (`SR2.TRA`), `ADDR` clear sequencing is modeled via `SR1` then `SR2` reads, and TX completion raises `TXE|BTF` (including DMA writes through `write_dma`). Board-level slave hooks now exist for common CubeBlack probe addresses with register-backed responses (for example HMC58x3/AK09916/BMP280-style IDs), and unknown addresses now NACK instead of blanket ACK. Remaining gap: full RM-accurate fault causes and peripheral-driven timing/IRQ edge fidelity (`BERR/ARLO/OVR/TIMEOUT` and request pacing). |
-| SDIO data timeout reduced | low | Implemented | `src/peripherals/sdio.rs` `DATA_TIMEOUT_DELAY_STEPS` reduced from `64` to `4`. DTIMEOUT fires 16× faster when DCTRL_DTEN is set, reducing the instruction cost of the data-phase timeout path that fires on every (unimplemented) SD card data read. |
-| DMA conflicting-stream diagnostics downgraded from WARN | medium | Implemented | `src/peripherals/dma.rs` now logs conflicting-stream arbitration (`preempted`/`blocked`) at `DEBUG` instead of `WARN`, while preserving the same transfer-error signaling behavior. Revalidated with `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000`: latest run reached `clk=120000000` with no emulator `WARN`, no emulator `ERROR`, and no `peri=????`; the former conflict message now appears as `DEBUG DMA1 stream=4 blocked conflicting request ...`. |
-| Validation snapshot for current state | high | Updated | Current release build passes bounded validation to `120000000` instructions with no emulator `WARN`, no emulator `ERROR`, and no `peri=????` unknown peripheral accesses. Short command: `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000` → stop at `clk=03000000 pc=0x0815ca54`, `real=1.42s`. Long command: `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000` → stop at `clk=120000000 pc=0x0815ca54`, `real=63.08s`, 0 WARN/ERROR lines. |
-| DMA circular mode, per-beat PINC/MINC, and correct NDTR tracking | high | Implemented | `src/peripherals/dma.rs` now stores `initial_ndtr` when NDTR is written; after each `do_xfer` completes, if CIRC=1 (SxCR bit 8) NDTR is reloaded to `initial_ndtr` and EN is kept set, otherwise EN is cleared and NDTR=0. `do_xfer` now separately tracks PSIZE (bits [12:11]) and MSIZE (bits [14:13]) and uses them for peripheral and memory transfer sizes respectively; MINC=0 case writes all beats to the same memory address; PINC with per-beat address increment handled for both P2M and M2P directions. `step_deferred` now calls `do_xfer` before completing so deferred USART RX DMA actually moves data from ext_device into the DMA destination buffer, and rearms the circular window if CIRC=1. `signal_tc` extracted to fire both TCIF flag and NVIC IRQ from one call site. Validated: ADC1 circular DMA2 transfer (`circ=true ndtr=64 psize=2 msize=2`) confirmed firing and reloading correctly at clk=10582014. |
-| Timer CCMR1, CCMR2, CCER register storage | medium | Partially Implemented | `src/peripherals/tim.rs` now stores and returns `CCMR1` (offset 0x0018), `CCMR2` (0x001C), and `CCER` (0x0020). Firmware that reads back these registers after writing (e.g., to verify OC mode configuration) now sees correct values. Output-compare mode decoding (OC1M/OC2M/OC3M/OC4M fields) and GPIO output toggling remain unimplemented; the compare-event firing logic is unchanged. |
-| EXTI peripheral added | medium | Partially Implemented | `src/peripherals/exti.rs` models the STM32F427 EXTI controller (base `0x40013C00`): IMR, EMR, RTSR, FTSR, SWIER, and PR registers with write-1-to-clear PR semantics. `SWIER` writes trigger matching lines via `trigger_line()` which sets PR and fires NVIC if IMR is unmasked. IRQ fanout matches STM32F427: EXTI0→6, EXTI1→7, EXTI2→8, EXTI3→9, EXTI4→10, EXTI5-9→23 (EXTI9_5), EXTI10-15→40 (EXTI15_10). A `gpio_pin_transition()` stub allows GPIO models to route edge events through EXTI. Wired into `src/peripherals/mod.rs` via `pub mod exti` and `Exti::new()` registration. EXTI lines 16–22 (wakeup/RTC/PVD) remain unmodeled. |
-| TIM peripheral extended to all 14 timers with EGR and CCR2-4 | medium | Partially Implemented | `src/peripherals/tim.rs` now covers TIM1–TIM14 with correct STM32F427 update IRQ numbers: TIM1(25), TIM2(28), TIM3(29), TIM4(30), TIM5(50), TIM6(54), TIM7(55), TIM8(44), TIM9(24), TIM10(25), TIM11(26), TIM12(43), TIM13(44), TIM14(45). Added dedicated `cc_irq_number()` for TIM1(27) and TIM8(46). Added EGR register (offset 0x0014): bit 0 forces update (sets SR UIF, fires update IRQ if DIER UIE set), bits 1–4 force CCx events. Added CCR2(0x0038), CCR3(0x003C), CCR4(0x0040) storage and compare-fire logic for DIER CC2IE/CC3IE/CC4IE. Added CR2(0x0004) and SMCR(0x0008) as stored pass-through registers. |
-| Flash ACR PRFTBS status bit mirrors PRFTBE | low | Implemented | `src/peripherals/flash.rs` now synthesizes PRFTBS (bit 5) from PRFTBE (bit 4) state on ACR reads, so firmware that checks the prefetch-buffer status bit after enabling the prefetch buffer sees it as active. |
-
-## Peripheral TODO Audit (Datasheet-Backed)
-
-The items below are concrete implementation gaps found in `src/peripherals/*.rs`, with reference targets in:
-
-- `cubeblack/STM32F4xx_Reference_Manual.md`
-- `cubeblack/stm32f427vg-datasheet.md`
-- `cubeblack/STM32F4_DMA.md` (AN4031 conversion)
-
-### Runtime-First Priority Order (ArduPilot Needs To Run)
-
-Work this list top-to-bottom; defer lower tiers until higher tiers are demonstrably improved.
-
-- P0 (must-have for runtime):
-	- SPI2 FRAM (FM25V02) device integration: **IMPLEMENTED** - device model in `src/ext_devices/ramtron.rs` plus full-duplex DMA RX-destination queueing in `src/peripherals/spi.rs` now allow end-to-end initialization without `Unable to init RAMTRON storage` / `Unknown RAMTRON device` lines in 120M validation.
-	- DMA request-line mapping and DMA interrupt signaling (TC/HT/TE to NVIC)
-	- UART/USART DMA coupling (`DMAT/DMAR`) and realistic SR/interrupt behavior
-	- SPI DMA request generation and stateful SR behavior for sensor traffic
-	- I2C transaction-state machine and status semantics needed for sensor bring-up
-	- TIM channels/modes actually used by scheduler and runtime device drivers
-- P1 (likely runtime-sensitive next):
-	- RCC clock-state transitions and clock-frequency effects on peripheral timing
-	- NVIC priority/enable behavior improvements when multiple interrupts compete
-	- Expanded CoreDebug/DWT counters only if firmware actively consumes them during runtime
-- P2 (defer until runtime markers are present):
-	- Advanced TIM breadth not used by current CubeBlack runtime path
-	- Wider SCB fault-model depth not currently hit in boot/runtime traces
-	- Non-critical peripheral features and generalized completeness work
-
-### DMA and Peripheral-DMA Coupling
-
-- [x] HIGH PRIORITY: Enforce STM32F427 stream/channel request mapping from `STM32F4_DMA.md` Table 1 and Table 2 instead of merely storing `CHSEL`. Current enforcement blocks mismatched stream/channel configurations for key active peripherals (ADC1/2/3, SPI1/2/3, USART/UART, I2C1/2/3, SDIO) while leaving unknown requests permissive.
-- [x] Peripheral-driven DMA requests: deferred USART RX now calls `do_xfer` when idle window expires, moving real ext_device bytes into the DMA buffer; SPI full-duplex DMA already handled via read_dma/write_dma.
-- [x] Per-beat NDTR tracking: `initial_ndtr` saved on NDTR write; NDTR set to 0 on non-circular completion; reloaded on circular completion.
-- [x] Distinct PSIZE/MSIZE: `do_xfer` now uses `psize()` (bits [12:11]) for peripheral transfers and `msize()` (bits [14:13]) for memory transfers.
-- [x] PINC/MINC per-beat increment: PINC=1 issues per-beat peripheral reads with address advance; MINC=0 writes all beats to the fixed memory address; MINC=1 writes sequentially (already correct).
-- [x] Circular-mode stream behavior: after `do_xfer`, if CIRC=1 NDTR reloads to `initial_ndtr` and EN stays set; validated on ADC1 DMA2 circular stream.
-- [x] Double-buffer mode (`M0AR`/`M1AR` + `CT`): `is_double_buffer()` checks SxCR bit18; after each completed transfer CT (bit19) is toggled so the hardware pointer alternates between `M0AR` and `M1AR`; `initial_ndtr` is reloaded; implies CIRC semantics.
-- [ ] HIGH PRIORITY: Implement FIFO/direct-mode behavior and threshold semantics (`DMA_SxFCR`) per AN4031 FIFO section. Basic transfer granularity is now mode-aware: direct mode uses single-beat chunks and FIFO mode uses `FTH` threshold-sized chunks. Remaining gap: full FIFO state machine (level/status/error-cause fidelity).
-- [ ] HIGH PRIORITY: Implement DMA interrupt signaling into NVIC for all relevant classes (`TC`, `HT`, `TE`, `DME`, `FE`) plus matching status-bit visibility in `LISR/HISR`. All five class flags and IRQ-gated paths are wired (`TC/HT/TE/DME/FE`), and error-class signaling is now mode-gated (`DME` in direct mode, `FE` in FIFO mode). Remaining gap: full RM-accurate trigger conditions per specific fault cause.
-- [ ] HIGH PRIORITY: Implement channel/request conflict handling and request arbitration when multiple enabled streams target the same peripheral request. Basic same-DMA arbitration now exists for duplicate `(channel, PAR)` enables: lower/equal priority new streams are blocked, higher-priority new streams preempt the current owner; broader request-key arbitration is still pending.
-- [ ] HIGH PRIORITY: Implement stream priority/arbitration semantics instead of treating all streams as immediate and conflict-free. Initial `PL`-based preemption is now wired for duplicate `(channel, PAR)` request conflicts, but full cross-stream arbitration behavior remains incomplete.
-- [ ] HIGH PRIORITY: Implement STM32F4-accurate disable/re-enable sequencing for `EN` clear/set behavior instead of treating enable as an immediate fire-and-forget trigger. Re-trigger on repeated `EN=1` writes is now blocked and `EN=0` disables deferred USART RX windows, but full RM-accurate enable/disable timing is still pending.
-
-### USART/UART
-
-- [ ] Implement `CR1/CR2/CR3` behavior beyond DR/SR stubs (UE/TE/RE, stop bits, parity, interrupt enable bits).
-- [ ] Implement realistic `SR` flag transitions (`TXE`, `TC`, `RXNE`, `IDLE`, error bits) instead of always-ready reads.
-- [x] Implement DMA coupling for UART/USART (`DMAT/DMAR` in `CR3`) so serial TX/RX can be DMA-driven. `src/peripherals/usart.rs` now gates DMA traffic on `CR3.DMAT`/`CR3.DMAR`, bypasses direct DR-to-probe writes while DMA TX is active, and uses batched `read_dma`/`write_dma` paths. `src/ext_devices/mod.rs` adds default batched `ExtDevice` helpers and `src/ext_devices/usart_probe.rs` overrides them with buffered slice processing so DMA bursts do not pay one trait-object call per byte. Revalidated with `cd cubeblack && ( /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000 ) > ardu.cubeblack.log 2>&1 & pid=$!; for _ in $(seq 120); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done; kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; tail -40 ardu.cubeblack.log`: latest log reaches `clk=120000000`, emits `Reached target number of instructions. Done`, and contains no emulator `WARN`, no emulator `ERROR`, and no `peri=????` lines.
-- [ ] Implement UART/USART interrupt generation (TXE/RXNE/TC/error paths) and clearing rules.
-- [ ] Implement baud-rate effects (`BRR`) enough for firmware timing assumptions.
-
-### SPI/I2S
-
-- [ ] Implement stateful SPI status flags (`TXE`, `RXNE`, `BSY`, OVR/MODF paths) instead of synthetic toggle behavior.
-- [ ] Implement SPI DMA request generation for RX/TX paths.
-- [ ] Implement core control semantics (`CPOL`, `CPHA`, frame format, NSS/master-slave effects) required by CubeBlack peripherals.
-- [ ] Implement SPI error/interrupt signaling (RXNE/TXE/ERR interrupt paths).
-
-### I2C
-
-- [x] Replace toggled `SR1/SR2` stubs with a real transaction state machine (start/address/data/stop progression). Minimal master-side sequencing is now modeled (`START`→`SB`, address phase, `ADDR` clear on `SR1` then `SR2`, STOP/reset paths).
-- [x] Implement key I2C status/control bit semantics (`SB`, `ADDR`, `BTF`, `RXNE`, `TXE`, `AF`, `BERR`, `ARLO`), including clear sequencing. Core bring-up bits are now modeled (`SB`, `ADDR`, `TXE`, `BTF`, `AF`) with `ADDR` clear sequencing; broader fault-cause fidelity (`BERR/ARLO/OVR/TIMEOUT`) is still simplified.
-- [x] Implement I2C DMA request generation and interrupt paths. `CR2.DMAEN` is now honored in `read_dma`/`write_dma` DR paths and DMA completion schedules EV signaling (`BTF`/event IRQ). Remaining gap: RM-accurate peripheral-driven request timing across full transaction phases.
-- [x] Add board-level I2C device behavior hooks for sensor bring-up paths used by ArduPilot. `src/peripherals/i2c.rs` now has address-scoped slave models with register-pointer writes and register-backed reads for common CubeBlack bring-up probes; unknown addresses return NACK to exercise firmware fallback paths.
-
-### TIM
-
-- [ ] Extend timer coverage beyond current TIM2–TIM14 subset; prioritize timer instances/channels used by ArduPilot runtime.
-- [x] Additional capture/compare channels (`CCR2/3/4`) now stored and compared; `CCMR1/2` and `CCER` output-mode decoding still unimplemented.
-- [x] EGR (Event Generation Register) force-update and CC-event bits now implemented.
-- [x] `CCMR1` (offset 0x0018), `CCMR2` (0x001C), `CCER` (0x0020) now stored and returned on read; OC mode decoding not yet implemented.
-- [ ] Implement timer DMA-request generation paths where firmware expects DMA-triggered operation.
-- [ ] Implement counting modes (down, center-aligned), auto-reload preload, and synchronized slave-mode behavior.
-
-### RCC/PWR/Clocking
-
-- [ ] Replace always-ready RCC behavior with stateful clock-enable/ready transitions (`CR`, `CFGR`, PLL/HSE/LSE paths) to remove hidden firmware bypass dependence.
-- [ ] Implement effective bus/clock configuration impacts needed by timing-sensitive peripherals (UART, TIM, DMA pacing assumptions).
-
-### SCB/NVIC/CoreDebug
-
-- [ ] Implement deeper fault-path semantics (fault status population + routing/escalation behavior) rather than read/write storage only.
-- [ ] Extend CoreDebug/DWT coverage beyond minimal `DEMCR`, `DWT_CTRL`, `DWT_CYCCNT` where firmware uses additional counters/registers.
-- [ ] Improve NVIC priority/enable behavior to better match real exception arbitration when multiple interrupt sources are active.
-
-## Reference Codebase Reuse Catalog
-
-Survey performed April 2026 covering Renode (modules/renode), AZhurGIT fork (modules/fork-AZhurGIT), and goran-mahovlic fork (modules/fork-goran-mahovlic). This section records which concrete reference files are most reusable when implementing each gap item below.
-
-| Gap | Best reference | Path | Notes |
-|---|---|---|---|
-| DMA request-line (peripheral→memory, triggered) | Renode `STM32DMA.cs` | `modules/renode/src/Infrastructure/src/Emulator/Peripherals/Peripherals/DMA/STM32DMA.cs` | `OnGPIO()` entry at line 46; `PerformTransfer()` at line 247; `CreateRequest()` at line 272 builds src/dst from config |
-| DMA FIFO threshold / direct-mode logic | Renode `STM32DMA.cs` | same | `GetCurrentTransferSize()` at line 345 returns one FIFO threshold unit in direct mode |
-| DMA PINC/MINC per-beat address increment | Renode `STM32DMA.cs` | same | lines 294–315 account for peripheral/memory increment flags in `CreateRequest()` |
-| Timer separate CCR compare timers | Renode `STM32_Timer.cs` | `modules/renode/src/Infrastructure/src/Emulator/Peripherals/Peripherals/Timers/STM32_Timer.cs` | 4 independent `ccTimers[]` constructed at lines 25–35; event handlers at lines 93–126 |
-| Timer 5 output-compare modes (SetActive/Inactive/Toggle/PWM1/PWM2) | Renode `STM32_Timer.cs` | same | `ccTimers[j]` event handlers lines 101–116 implement all 5 OC modes |
-| Timer repetition counter (TIM1/TIM8 advanced) | Renode `STM32_Timer.cs` | same | lines 77–85 apply repetition counter before firing update IRQ |
-| EXTI direct vs configurable line routing | Renode `STM32F4_EXTI.cs` | `modules/renode/src/Infrastructure/src/Emulator/Peripherals/Peripherals/IRQControllers/STM32F4_EXTI.cs` | `OnGPIO()` at lines 38–54; direct lines pass through immediately, configurable lines always latch pending |
-| Flash sector erase + mass erase | Renode `STM32F4_FlashController.cs` | `modules/renode/src/Infrastructure/src/Emulator/Peripherals/Peripherals/MTD/STM32F4_FlashController.cs` | `Erase()` at lines 182–197; SER/MER/SNB fields at lines 133–145 |
-| Flash lock-key mechanism (KEYR unlock) | Renode `STM32F4_FlashController.cs` | same | `controlLock.ConsumeValue()` pattern at lines 56–67 |
-| Flash option bytes region (0x1FFFC000) | Renode `STM32F4_FlashController.cs` | same | dual address space at lines 42–47 |
-| Flash status register (BSY/EOP/OPERR/error flags) | Renode `STM32F4_FlashController.cs` | same | `StatusRegister` fields at lines 105–126 |
-| FMC 4-bank abstraction with ext-device routing | goran-mahovlic `fmc.rs` | `modules/fork-goran-mahovlic/src/peripherals/fmc.rs` | `Bank` struct with `ext_device` connector at lines 92–135; register decode at lines 27–67 |
-| SVD-based register/IRQ lookup | AZhurGIT `meta.rs` | `modules/fork-AZhurGIT/src/peripherals/meta.rs` | `DeviceMeta::from_svd()` at lines 31–75; `irq_of()` at line 102; removes hardcoded offsets |
-| RCC ready-bit auto-sync pattern | AZhurGIT `rcc.rs` | `modules/fork-AZhurGIT/src/peripherals/rcc.rs` | `update_ready_bits()` at lines 129–141 — our rcc.rs now mirrors this |
-
-### Items not yet tracked in FEATURE_GAP.md that this audit revealed
-
-- [ ] LOW: Flash sector erase and mass erase (SER/MER/SNB/STRT in FLASH_CR). Firmware that erases config sectors before writing will stall on BSY; reference: Renode `STM32F4_FlashController.cs` lines 182–197.
-- [ ] LOW: Flash lock/unlock key sequence (KEYR → write `0x45670123` then `0xCDEF89AB`). Real hardware ignores control writes when locked; our stub allows writes unconditionally. Reference: Renode `STM32F4_FlashController.cs` lines 56–67.
-- [ ] LOW: Flash status register (BSY, EOP, OPERR, WRPERR, PGAERR flags). Firmware that polls BSY after erase/program will spin forever without it. Reference: Renode `STM32F4_FlashController.cs` lines 105–126.
-- [ ] LOW: FMC/FSMC 4-bank abstraction with external device routing. Current `fsmc.rs` is a stub; the goran-mahovlic fork has a complete `Bank` struct with `ext_device` connector. Reference: `modules/fork-goran-mahovlic/src/peripherals/fmc.rs`.
-- [ ] MEDIUM: AZhurGIT `meta.rs` SVD-driven register-offset and IRQ-number lookup. Eliminates hardcoded offsets and supports F1/F4 variants from one codebase. Port overhead is moderate; benefit is long-term maintainability, not immediate boot progress.
-
-### Renode comparison migration status
-
-This file is now the canonical backlog. Content from the former Renode comparison write-up has been migrated here so the old comparison file can be retired.
-
-Items from that comparison that are still not fully implemented:
-
-- [ ] HIGH: USB OTG FS remains partial; endpoint/FIFO/interrupt behavior is still incomplete for full CDC-accurate modeling.
-- [ ] MEDIUM: `meta.rs` adoption is still partial; IRQ lookup is now used by both I2C and TIM, but broader register-offset migration is pending.
-- [ ] MEDIUM: Missing STM32F4 peripheral coverage compared to Renode still includes Ethernet MAC.
-- [ ] LOW: LTDC/video support remains unimplemented (not currently required for CubeBlack runtime milestones).
-
-Items from that comparison that are now implemented or materially addressed:
-
-- [x] TIM model is present and covers TIM1-TIM14 with update/CC event handling.
-- [x] EXTI peripheral model is implemented and wired.
-- [x] FLASH control/register behavior is implemented beyond simple ACR stubs.
-- [x] DMA now performs real memory movement (`mem_read`/`mem_write`) instead of register-only completion.
-- [x] PWR and ADC peripheral models are present.
-- [x] Bit-band alias support now includes both peripheral alias mapping and SRAM alias mapping.
-- [x] Missing-peripheral gap items CAN, RTC, IWDG, RNG, and CRC now have peripheral stubs wired in the main registry.
-
----
-
-## Advanced TIM Peripheral
-
-| Feature | Priority | Status | Notes/Technical Issues |
-| --- | --- | --- | --- |
-| TIM1/TIM8 control register coverage (`CR2`, `SMCR`, `EGR`, `CCER`, `BDTR`, `RCR`) | low | Partially Implemented | `CR2`, `SMCR`, and `EGR` (update + CC event generation) now implemented. `CCER`, `BDTR`, `RCR`, and complementary output control remain unimplemented. |
-| Channel state for `CCR2`, `CCR3`, `CCR4`, `CCMR1`, and `CCMR2` | low | Partially Implemented | `CCR2/3/4` storage and compare-event firing now implemented. `CCMR1/2` output-mode decoding and `CCER` polarity/enable control remain unimplemented. |
-| Advanced counting modes (up, down, center-aligned) | low | Unimplemented | The current counter behavior is a simple monotonically increasing software timebase and does not support direction or center-aligned update rules. |
-| Update, compare, commutation, trigger, and break event semantics | low | Unimplemented | `SR` and `DIER` handling is minimal, so firmware that expects full event flag behavior may stall or mis-handle interrupt state. |
-| Complementary outputs, MOE, break input, and dead-time insertion | low | Unimplemented | Advanced PWM motor-control behavior for TIM1/TIM8 requires output-stage modeling that does not exist in the emulator yet. |
-| Timer synchronization and master-slave trigger chaining | low | Unimplemented | Timer link behavior across TIM peripherals is not implemented, so synchronized startup and chained events are currently unsupported. |
-| TIM1/TIM8 DMA request generation | low | Unimplemented | Advanced timers can raise DMA requests independently; without that behavior, DMA-driven PWM setup or polling loops may not progress correctly. |
+| Section | Technical Item | Priority | Completion | Notes |
+| --- | --- | --- | --- | --- |
+| Document Scope | Track emulator features that are incomplete or not yet implemented. | medium | active | This table is the only format used in the document. |
+| Deliverable | End goal is CubeBlack boot plus ArduPilot runtime under emulator with realistic emulator-side behavior. | high | active | Avoid reliance on firmware-side startup bypasses. |
+| Deliverable | This file is the primary backlog and technical handover for remaining work to reach the deliverable. | high | active | Treat as canonical source of remaining work. |
+| Deliverable | Prioritize items that unblock demonstrable CubeBlack boot progress first. | high | active | Follow with correctness and hardware coverage items. |
+| Deliverable | Priority scale definition. | medium | active | high means runtime blockers, medium means useful non-immediate blockers, low means defer until proven needed. |
+| Recently Fixed | CubeBlack target bring-up assets and board configuration. | medium | implemented | Commit f46e695 introduced board files, firmware artifacts, cubeblack config, run script, and STM32F427 SVD. |
+| Recently Fixed | CubeBlack bootloader artifact rebuilt for oscillator configuration change. | medium | implemented | Commit 5797f0f updated cubeblack CubeBlack_bl.hex artifact used by emulator. |
+| Recently Fixed | Historical startup bypass retired from active path. | medium | updated | Commit 377a746 had temporary firmware workaround; current progress should be judged on emulator-side models and latest validation evidence. |
+| Implemented | CubeBlack memory map updated for CCM RAM and system memory. | medium | implemented | cubeblack config maps RAM-CCM at 0x10000000 and SYSMEM at 0x1FFF0000. |
+| Implemented | STM32 unique ID bytes patched into system memory. | medium | implemented | 12-byte UID payload injected at 0x1FFF7A10 via config. |
+| Implemented | SPI2 FRAM FM25V02 emulation. | high | implemented | ramtron model plus SPI full-duplex DMA bridge fixes with correct RDID and full 32KB reads. |
+| Implemented | DMA global register decode corrected. | medium | implemented | dma model decodes global regs at 0x00..0x0f and streams at 0x10 plus n times 0x18. |
+| Implemented | DMA transfer-complete flag and clear semantics. | medium | implemented | lisr and hisr tracking with TCIF set and LIFCR/HIFCR clear behavior. |
+| Implemented | NVIC stack-pointer restore and IPSR numbering corrected. | medium | implemented | Restores selected stack pointer and writes architectural exception number 16 plus irq to IPSR. |
+| Implemented | Minimal TIM5 TIM6 TIM7 timebase. | medium | partially implemented | Provides CR1 DIER SR CNT PSC ARR CCR1 subset, not full advanced timer model. |
+| Implemented | Core SCB state and dynamic VTOR handling. | medium | partially implemented | SCB register state and VTOR-based exception dispatch present, but fault semantics and SHPR arbitration behavior remain limited. |
+| Implemented | Minimal CoreDebug and DWT cycle-counter support. | medium | partially implemented | DEMCR DWT_CTRL DWT_CYCCNT modeled with monotonic cycle counter. |
+| Implemented | DMA stream transfer-complete IRQ signaling to NVIC. | medium | partially implemented | TCIE path now raises STM32F427 stream IRQ; wider request-line and HT TE signaling gaps remain. |
+| Implemented | Minimal OTG FS global and device bring-up. | high | partially implemented | Synthetic USBRST ENUMDNE SOF and EP0 setup plus ZLP completion modeled; FIFO payload semantics and CDC bridge remain partial. |
+| Implemented | Exception-frame sizing and BASEPRI-aware IRQ gating corrected. | high | implemented | Fixed late scheduler corruption and removed FETCH_UNMAPPED crash around 10.64M instructions. |
+| Implemented | Free-running TIM stepping and TIM5 compare wakeup fixed. | medium | implemented | Timers advance from main loop with prescaler remainder preserved. |
+| Implemented | Minimal RCC startup status model. | high | partially implemented | Ready-bit synthesis and basic CFGR CSR BDCR mirroring remove early clock-init stalls; full clock-tree timing not modeled. |
+| Implemented | Minimal PWR regulator-ready model. | high | partially implemented | CR CSR semantics with immediate VOSRDY ODRDY ODSWRDY support startup polling. |
+| Implemented | Minimal FLASH ACR model. | high | partially implemented | ACR and related control registers stored for latency-programming loops. |
+| Implemented | Busy-loop diagnostic capture. | medium | implemented | busy-loop stop now logs PC SP LR R0-R7 context words and restore frame. |
+| Implemented | USART probe line flushing improvements. | medium | implemented | Flush on CR and LF and on long buffers for better boot-text visibility. |
+| Implemented | USART register state persistence expansion. | medium | partially implemented | SR DR BRR CR1 CR2 CR3 GTPR persisted; TXE and TC preserved over init writes; full interrupt and state-machine behavior pending. |
+| Implemented | Deferred external IRQ delivery to block boundary. | high | implemented | Prevents mixed thread-handler execution state and fixes deterministic late crash around 145255239 instructions. |
+| Implemented | CubeBlack run script hardened for local environments. | medium | implemented | run script now sources Cargo env when present and falls back to release binary. |
+| Handover Blockers | GDB remote debugging support in gdb path and CLI flag. | high | implemented | Remote stub supports attach inspect breakpoints step continue and halt at firmware symbols. |
+| Handover Blockers | busy-loop-stop ignores transient idle waits and follows timer wakeups. | high | implemented | Requires sustained repeated-PC streak before halting and now shows TIM5 wake activity. |
+| Handover Blockers | Runtime reaches 200M cleanly after deferred IRQ delivery fix. | high | updated | Late crash removed; bounded runs reach 200000000 with no WARN ERROR or unknown peripheral accesses in cited validation. |
+| Handover Blockers | USB OTG FS RXFLVL and GRXSTSP enumeration sequence completion. | high | implemented | Full synthetic setup data, setup complete, STUP and XFRC sequence with set-address and set-configuration acknowledgement. |
+| Handover Blockers | First ArduPilot console line captured over USB CDC. | high | implemented | EP1 bulk IN via TXFE path captured expected runtime text fragments. |
+| Handover Blockers | SPI2 RAMTRON full-duplex DMA bridge. | high | implemented | In-place buffer corruption fixed by RX destination queueing and write_dma exchange semantics. |
+| Handover Blockers | SDIO CMDSENT unblock stub. | high | partially implemented | CMDSENT and CTIMEOUT paths unblock spin but full SDIO DMA interrupt and data-transfer behavior still stubbed. |
+| Handover Blockers | CubeBlack board-validation sensor stubs. | high | implemented | SPI whoami and MS5611 checks satisfy board validation predicates so startup no longer traps there. |
+| Handover Blockers | CoreDebug and DWT coverage breadth remains minimal. | medium | partially implemented | Wider DWT CoreDebug register set and debug-trigger side effects still unmodeled. |
+| Handover Blockers | ADC peripheral stub for ADC1 ADC2 ADC3. | medium | partially implemented | EOC always set and DR synthetic half-scale output; DMA read emits correct halfword bytes. |
+| Handover Blockers | USART SR realistic RXNE transitions. | low | implemented | RXNE removed from default idle SR and DR read clears RXNE. |
+| Handover Blockers | I2C transaction sequencing baseline with board-level hooks. | medium | partially implemented | EV5 EV6 EV8_2 style sequencing plus address-scoped slave hooks and unknown-address NACK; full RM fault and timing fidelity still pending. |
+| Handover Blockers | SDIO data timeout reduced for faster failure path. | low | implemented | DATA_TIMEOUT_DELAY_STEPS reduced from 64 to 4. |
+| Handover Blockers | DMA conflicting-stream diagnostics downgraded from WARN to DEBUG. | medium | implemented | Behavior preserved while warning noise removed. |
+| Handover Blockers | Validation snapshot for current state. | high | updated | Short and long bounded validation cited with no WARN ERROR or unknown peripheral accesses. |
+| Handover Blockers | DMA circular mode PINC MINC and NDTR tracking correctness. | high | implemented | initial_ndtr, circular reload, per-beat increment semantics, deferred USART RX transfer, and unified signal_tc are in place. |
+| Handover Blockers | Timer CCMR1 CCMR2 CCER register storage. | medium | partially implemented | Registers persist and read back, but output-compare mode decode and GPIO toggling remain unimplemented. |
+| Handover Blockers | EXTI peripheral model added and wired. | medium | partially implemented | Core EXTI registers and IRQ fanout modeled; lines 16 through 22 remain unmodeled. |
+| Handover Blockers | TIM peripheral extended to TIM1 through TIM14 with EGR and CCR2-4. | medium | partially implemented | Update and compare events expanded, with remaining OC mode decoding gaps. |
+| Handover Blockers | FLASH ACR PRFTBS mirrors PRFTBE. | low | implemented | Prefetch status now appears active after prefetch enable. |
+| Audit Scope | Peripheral TODO audit is datasheet-backed and targets concrete gaps in src peripherals. | high | active | Reference targets include STM32F4 reference manual datasheet and converted DMA application note. |
+| Runtime Priority | P0 work should be completed first for runtime viability. | high | active | Includes DMA mapping and signaling, USART DMA and SR behavior, SPI DMA and SR behavior, I2C transaction semantics, and runtime timer channels and modes. |
+| Runtime Priority | P1 work is likely runtime-sensitive but secondary to P0. | medium | active | Includes RCC timing effects, NVIC contention behavior, and broader CoreDebug DWT only when consumed. |
+| Runtime Priority | P2 work is deferred until runtime markers are present. | low | active | Includes advanced timer breadth, deeper SCB fault model, and generalized non-critical completeness. |
+| DMA Todo | Enforce STM32F427 stream and channel request mapping from DMA reference tables. | high | done | Implemented with permissive fallback for unknown requests. |
+| DMA Todo | Peripheral-driven DMA requests for deferred USART RX and SPI full-duplex path. | high | done | Deferred USART RX calls do_xfer and SPI full-duplex handled via dma read and write hooks. |
+| DMA Todo | Per-beat NDTR tracking. | high | done | initial_ndtr saved and NDTR behavior differs for circular versus non-circular completion. |
+| DMA Todo | Distinct PSIZE and MSIZE handling. | high | done | Transfer paths now use independent peripheral and memory data sizes. |
+| DMA Todo | PINC and MINC per-beat increment behavior. | high | done | PINC and MINC handling now modeled per beat. |
+| DMA Todo | Circular-mode stream behavior. | high | done | Circular mode keeps EN set and reloads NDTR from initial_ndtr. |
+| DMA Todo | Double-buffer mode M0AR M1AR and CT toggle behavior. | high | done | DBM path toggles CT and reloads NDTR, implying circular semantics. |
+| DMA Todo | Implement full FIFO direct-mode threshold semantics and FIFO state machine. | high | open | Basic chunk granularity implemented; full FIFO level status and error-cause fidelity still missing. |
+| DMA Todo | Implement full DMA interrupt signaling classes with matching status visibility. | high | open | TC HT TE DME FE class paths wired; RM-accurate trigger conditions remain incomplete. |
+| DMA Todo | Implement broader request conflict handling and arbitration for shared requests. | high | open | Current arbitration handles duplicate channel and PAR conflicts only. |
+| DMA Todo | Implement full stream priority arbitration semantics. | high | open | Initial PL-based preemption exists but wider cross-stream arbitration is incomplete. |
+| DMA Todo | Implement STM32F4-accurate EN disable and re-enable sequencing timing. | high | open | Re-trigger blocking and EN-clear behavior improved but full timing fidelity still pending. |
+| USART Todo | Implement CR1 CR2 CR3 behavior beyond stubs. | high | open | Needs UE TE RE stop bits parity and interrupt-enable semantics. |
+| USART Todo | Implement realistic SR transitions. | high | open | Needs TXE TC RXNE IDLE and error-flag state machine behavior. |
+| USART Todo | Implement UART USART DMA coupling via DMAT and DMAR in CR3. | high | done | DMAT DMAR gated DMA flow with batched ext-device helpers validated in 120M run. |
+| USART Todo | Implement UART USART interrupt generation and clearing rules. | high | open | TXE RXNE TC and error paths still pending. |
+| USART Todo | Implement baud-rate effects from BRR for timing assumptions. | medium | open | Timing-sensitive firmware may depend on BRR effects. |
+| SPI Todo | Implement stateful SPI status flags instead of synthetic toggles. | high | open | Needs TXE RXNE BSY and OVR MODF paths. |
+| SPI Todo | Implement SPI DMA request generation for RX and TX. | high | open | Required for realistic sensor traffic behavior. |
+| SPI Todo | Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | open | Needed by CubeBlack peripheral behavior. |
+| SPI Todo | Implement SPI error and interrupt signaling paths. | medium | open | Needs RXNE TXE and ERR interrupt behavior. |
+| I2C Todo | Replace toggled SR1 SR2 stubs with transaction state machine. | high | done | Start address data stop progression modeled with ADDR clear sequencing. |
+| I2C Todo | Implement key status and control semantics and clear ordering. | high | done | SB ADDR BTF RXNE TXE AF modeled with simplified broader fault fidelity. |
+| I2C Todo | Implement I2C DMA request generation and interrupt paths. | high | done | CR2 DMAEN gating and BTF event scheduling implemented; request timing fidelity remains partial. |
+| I2C Todo | Add board-level I2C device hooks for ArduPilot sensor bring-up paths. | high | done | Address-scoped models with register-pointer reads and writes and unknown-address NACK behavior are in place. |
+| TIM Todo | Extend timer coverage beyond current subset based on runtime use. | medium | open | Prioritize runtime-used instances and channels first. |
+| TIM Todo | Additional CCR2 CCR3 CCR4 channels. | medium | done | Stored and compared with known CCMR and CCER decode gaps. |
+| TIM Todo | Event generation register force-update and CC-event bits. | medium | done | EGR support added. |
+| TIM Todo | CCMR1 CCMR2 CCER readback support. | medium | done | OC mode decoding still pending. |
+| TIM Todo | Timer DMA request generation paths. | medium | open | Needed where firmware expects DMA-triggered operation. |
+| TIM Todo | Counting modes preload and slave synchronization behavior. | medium | open | Down center-aligned ARPE and sync behavior still missing. |
+| RCC and Clocking Todo | Replace always-ready RCC behavior with stateful transitions for CR CFGR and oscillator and PLL paths. | high | open | Remove hidden firmware bypass dependence. |
+| RCC and Clocking Todo | Implement effective bus and clock configuration impacts on peripheral timing. | high | open | Affects UART TIM and DMA pacing assumptions. |
+| SCB NVIC CoreDebug Todo | Implement deeper fault-path semantics and escalation behavior. | medium | open | Current implementation is mostly register storage. |
+| SCB NVIC CoreDebug Todo | Extend CoreDebug DWT coverage beyond minimal counters and controls. | medium | open | Expand only where firmware consumption proves needed. |
+| SCB NVIC CoreDebug Todo | Improve NVIC priority and enable arbitration with multiple active sources. | medium | open | Needed for realistic exception competition behavior. |
+| Reference Reuse | Best reference for DMA request-line triggered transfer model. | medium | cataloged | Renode STM32DMA.cs uses OnGPIO, PerformTransfer, and CreateRequest patterns. |
+| Reference Reuse | Best reference for DMA FIFO and direct-mode transfer-size logic. | medium | cataloged | Renode STM32DMA.cs GetCurrentTransferSize pattern. |
+| Reference Reuse | Best reference for DMA PINC MINC per-beat increment logic. | medium | cataloged | Renode STM32DMA.cs CreateRequest increment handling. |
+| Reference Reuse | Best reference for timer separate CCR compare timers. | medium | cataloged | Renode STM32_Timer.cs ccTimers construction and event handlers. |
+| Reference Reuse | Best reference for timer output-compare modes including PWM variants. | medium | cataloged | Renode STM32_Timer.cs compare handlers implement five OC modes. |
+| Reference Reuse | Best reference for repetition counter behavior in advanced timers. | medium | cataloged | Renode STM32_Timer.cs applies repetition counter before update IRQ. |
+| Reference Reuse | Best reference for EXTI direct and configurable line routing. | medium | cataloged | Renode STM32F4_EXTI.cs OnGPIO behavior. |
+| Reference Reuse | Best reference for FLASH sector erase and mass erase logic. | low | cataloged | Renode STM32F4_FlashController.cs Erase path with control bits. |
+| Reference Reuse | Best reference for FLASH lock key mechanism. | low | cataloged | Renode flash controller KEYR unlock sequence pattern. |
+| Reference Reuse | Best reference for FLASH option-bytes region handling. | low | cataloged | Renode flash controller dual address-space model. |
+| Reference Reuse | Best reference for FLASH status register flags. | low | cataloged | Renode flash controller status bits model. |
+| Reference Reuse | Best reference for FMC bank abstraction and external-device routing. | medium | cataloged | goran-mahovlic fmc model has bank plus ext-device connector pattern. |
+| Reference Reuse | Best reference for SVD-driven register and IRQ lookup meta layer. | medium | cataloged | AZhurGIT meta layer includes from_svd and irq_of support. |
+| Reference Reuse | Best reference for RCC ready-bit auto-sync pattern. | medium | cataloged | AZhurGIT rcc update_ready_bits approach mirrored in current rcc model. |
+| Audit Revealed | FLASH sector and mass erase not yet tracked previously. | low | open | Missing SER MER SNB STRT behavior can block firmware erase flows. |
+| Audit Revealed | FLASH lock unlock key sequence not fully modeled. | low | open | Locked hardware should ignore writes until correct key sequence. |
+| Audit Revealed | FLASH status flags BSY EOP and error bits not fully modeled. | low | open | Firmware polling BSY may stall without accurate status behavior. |
+| Audit Revealed | FMC FSMC 4-bank abstraction with external routing is missing. | low | open | Current fsmc model is stub compared to fork reference implementation. |
+| Audit Revealed | Broader AZhurGIT meta adoption not complete. | medium | open | Benefits maintainability but is not immediate top runtime blocker. |
+| Migration Status | This file is canonical backlog after migration from former comparison write-up. | medium | done | Old comparison content migrated into this table. |
+| Migration Open | USB OTG FS remains partial for full CDC-accurate endpoint FIFO and interrupt behavior. | high | open | Further USB behavior depth still needed. |
+| Migration Open | meta adoption remains partial beyond IRQ lookup in I2C and TIM. | medium | open | Broader register-offset migration pending. |
+| Migration Open | Ethernet MAC peripheral coverage is still missing versus reference baseline. | medium | open | Coverage gap remains. |
+| Migration Open | LTDC video support remains unimplemented. | low | open | Not currently required for CubeBlack runtime milestones. |
+| Migration Completed | TIM model coverage now includes TIM1 through TIM14 with update and CC event handling. | medium | done | Core timer breadth significantly expanded. |
+| Migration Completed | EXTI peripheral model is implemented and wired. | medium | done | Basic EXTI interrupt model present. |
+| Migration Completed | FLASH control and register behavior goes beyond simple ACR stubs. | medium | done | Expanded flash model now present. |
+| Migration Completed | DMA performs real memory movement rather than register-only completion. | high | done | mem_read and mem_write transfer behavior implemented. |
+| Migration Completed | PWR and ADC peripheral models are present. | medium | done | Baseline peripheral coverage expanded. |
+| Migration Completed | Bit-band alias support includes peripheral and SRAM alias mappings. | medium | done | Both alias regions are covered. |
+| Migration Completed | Missing-peripheral gap stubs for CAN RTC IWDG RNG and CRC are wired in main registry. | medium | done | Registration and basic models are present. |
+| Advanced TIM | TIM1 TIM8 advanced control register coverage for CR2 SMCR EGR CCER BDTR RCR. | low | partially implemented | CR2 SMCR EGR present; CCER BDTR RCR and complementary-output control remain missing. |
+| Advanced TIM | Channel state for CCR2 CCR3 CCR4 CCMR1 and CCMR2. | low | partially implemented | CCR2 through CCR4 storage and compare firing are present; CCMR decode and CCER polarity enable remain incomplete. |
+| Advanced TIM | Advanced counting modes up down and center-aligned. | low | open | Current behavior is monotonic software timebase without direction or center-aligned rules. |
+| Advanced TIM | Update compare commutation trigger and break event semantics. | low | open | SR and DIER behavior remains minimal. |
+| Advanced TIM | Complementary outputs MOE break input and dead-time insertion. | low | open | Required for advanced PWM motor-control fidelity. |
+| Advanced TIM | Timer synchronization and master-slave trigger chaining. | low | open | Cross-timer link behavior is not implemented. |
+| Advanced TIM | TIM1 TIM8 DMA request generation. | low | open | Advanced timer DMA request behavior still missing. |
