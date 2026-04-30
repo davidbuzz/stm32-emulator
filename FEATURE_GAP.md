@@ -13,11 +13,6 @@
 | RCC Replace always-ready RCC behavior with stateful transitions for CR CFGR and oscillator and PLL paths. | high | open | Remove hidden firmware bypass dependence. |
 | RCC Implement effective bus and clock configuration impacts on peripheral timing. | high | open | Affects UART TIM and DMA pacing assumptions. |
 | USB OTG FS remains partial for full CDC-accurate endpoint FIFO and interrupt behavior. | high | open | Further USB behavior depth still needed. |
-| End goal is CubeBlack boot plus ArduPilot runtime under emulator with realistic emulator-side behavior. | high | open | Avoid reliance on firmware-side startup bypasses. |
-| This file is the primary backlog and technical handover for remaining work to reach the deliverable. | high | open | Treat as canonical source of remaining work. |
-| Prioritize items that unblock demonstrable CubeBlack boot progress first. | high | open | Follow with correctness and hardware coverage items. |
-| Peripheral TODO audit is datasheet-backed and targets concrete gaps in src peripherals. | high | open | Reference targets include STM32F4 reference manual datasheet and converted DMA application note. |
-| P0 work should be completed first for runtime viability. | high | open | Includes DMA mapping and signaling, USART DMA and SR behavior, SPI DMA and SR behavior, I2C transaction semantics, and runtime timer channels and modes. |
 | USART Implement baud-rate effects from BRR for timing assumptions. | medium | open | Timing-sensitive firmware may depend on BRR effects. |
 | SPI Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | open | Needed by CubeBlack peripheral behavior. |
 | SPI Implement SPI error and interrupt signaling paths. | medium | open | Needs RXNE TXE and ERR interrupt behavior. |
@@ -30,9 +25,6 @@
 | Broader AZhurGIT meta adoption not complete. | medium | open | Benefits maintainability but is not immediate top runtime blocker. |
 | meta adoption remains partial beyond IRQ lookup in I2C and TIM. | medium | open | Broader register-offset migration pending. |
 | Ethernet MAC peripheral coverage is still missing versus reference baseline. | medium | open | Coverage gap remains. |
-| Track emulator features that are incomplete or not yet implemented. | medium | open | This table is the only format used in the document. |
-| Priority scale definition. | medium | open | high means runtime blockers, medium means useful non-immediate blockers, low means defer until proven needed. |
-| P1 work is likely runtime-sensitive but secondary to P0. | medium | open | Includes RCC timing effects, NVIC contention behavior, and broader CoreDebug DWT only when consumed. |
 | FLASH sector and mass erase not yet tracked previously. | low | open | Missing SER MER SNB STRT behavior can block firmware erase flows. |
 | FLASH lock unlock key sequence not fully modeled. | low | open | Locked hardware should ignore writes until correct key sequence. |
 | FLASH status flags BSY EOP and error bits not fully modeled. | low | open | Firmware polling BSY may stall without accurate status behavior. |
@@ -43,7 +35,6 @@
 | TIM Complementary outputs MOE break input and dead-time insertion. | low | open | Required for advanced PWM motor-control fidelity. |
 | TIM Timer synchronization and master-slave trigger chaining. | low | open | Cross-timer link behavior is not implemented. |
 | TIM TIM1 TIM8 DMA request generation. | low | open | Advanced timer DMA request behavior still missing. |
-| P2 work is deferred until runtime markers are present. | low | open | Includes advanced timer breadth, deeper SCB fault model, and generalized non-critical completeness. |
 | Minimal TIM5 TIM6 TIM7 timebase. | medium | partially implemented | Provides CR1 DIER SR CNT PSC ARR CCR1 subset, not full advanced timer model. |
 | Core SCB state and dynamic VTOR handling. | medium | partially implemented | SCB register state and VTOR-based exception dispatch present, but fault semantics and SHPR arbitration behavior remain limited. |
 | Minimal CoreDebug and DWT cycle-counter support. | medium | partially implemented | DEMCR DWT_CTRL DWT_CYCCNT modeled with monotonic cycle counter. |
