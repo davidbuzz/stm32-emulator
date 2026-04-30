@@ -4,7 +4,7 @@
 | DMA Implement full DMA interrupt signaling classes with matching status visibility. | high | open | TC HT TE DME FE class paths wired; RM-accurate trigger conditions remain incomplete. |
 | DMA Implement broader request conflict handling and arbitration for shared requests. | high | open | Current arbitration handles duplicate channel and PAR conflicts only. |
 | DMA Implement full stream priority arbitration semantics. | high | open | Initial PL-based preemption exists but wider cross-stream arbitration is incomplete. |
-| DMA Implement STM32F4-accurate EN disable and re-enable sequencing timing. | high | open | Re-trigger blocking and EN-clear behavior improved but full timing fidelity still pending. |
+| DMA Implement STM32F4-accurate EN disable and re-enable sequencing timing. | high | done | Enforce 8-instruction delay between EN=0 and EN=1. disable_requested_at field tracks pending disables; service_disable_delay() gates re-enable. CR read/write paths call service_disable_delay(). Validated at 120M instructions. |
 | USART Implement CR1 CR2 CR3 behavior beyond stubs. | high | open | Needs UE TE RE stop bits parity and interrupt-enable semantics. |
 | USART Implement realistic SR transitions. | high | open | Needs TXE TC RXNE IDLE and error-flag state machine behavior. |
 | USART Implement UART USART interrupt generation and clearing rules. | high | open | TXE RXNE TC and error paths still pending. |
