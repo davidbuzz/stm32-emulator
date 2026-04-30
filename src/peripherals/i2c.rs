@@ -4,17 +4,19 @@
 // STM32F427 bases: I2C1=0x40005400, I2C2=0x40005800, I2C3=0x40005C00.
 // Key registers: CR1, CR2, OAR1/2, DR, SR1, SR2, CCR, TRISE, FLTR.
 // Key function: sensor/configuration bus used heavily by ArduPilot board bring-up.
-// Critical for this emulator: real boot/runtime progress likely depends on realistic SR1/SR2 state.
-// Current model is a minimal stub with toggled status behavior, not a transaction state machine.
-// Still incomplete: START/ADDR/BTF/TXE/RXNE sequencing, DMA requests, interrupt behavior.
+// Critical for this emulator: ChibiOS expects EV5/EV6/EV8_2 style SR1/SR2 sequencing.
+// Current model provides a minimal master-side state machine with synthetic ACK/data behavior.
+// Still incomplete: real slave device hooks, DMA requests beyond basic DR access, and full IRQ/error fidelity.
 // Datasheet/reference anchor: STM32F4 RM I2C chapter.
 
+use std::collections::VecDeque;
+
 use crate::system::System;
-use super::{Peripheral, meta::DeviceMeta};
+use super::{meta::DeviceMeta, Peripheral};
 
 pub struct I2c {
     name: String,
-    event_irq: i32, // resolved from SVD via DeviceMeta at construction
+    event_irq: i32,
     error_irq: i32,
     cr1: u32,
     cr2: u32,
@@ -27,41 +29,55 @@ pub struct I2c {
     trise: u32,
     fltr: u32,
     awaiting_address: bool,
+    awaiting_addr_clear: bool,
+    last_addr_was_read: bool,
+    sr1_read_armed_for_addr_clear: bool,
     pending_event_irq: Option<u8>,
     pending_error_irq: Option<u8>,
 }
 
 impl I2c {
     pub fn new(name: &str, meta: &DeviceMeta) -> Option<Box<dyn Peripheral>> {
-        if name.starts_with("I2C") {
-            // Look up IRQ numbers from SVD.  Fall back to STM32F427 RM values if SVD
-            // doesn't list them (e.g. derived peripherals that inherit interrupt entries).
-            let ev_name = format!("{}_EV", name);
-            let er_name = format!("{}_ER", name);
-            let (event_irq, error_irq) = match name {
-                "I2C1" => (meta.irq_of(&ev_name).unwrap_or(31), meta.irq_of(&er_name).unwrap_or(32)),
-                "I2C2" => (meta.irq_of(&ev_name).unwrap_or(33), meta.irq_of(&er_name).unwrap_or(34)),
-                "I2C3" => (meta.irq_of(&ev_name).unwrap_or(72), meta.irq_of(&er_name).unwrap_or(73)),
-                _      => return None, // unknown I2C instance — don't register
-            };
-            Some(Box::new(Self {
-                name: name.to_string(),
-                event_irq,
-                error_irq,
-                trise: 0x0000_0002,
-                cr1: 0, cr2: 0, oar1: 0, oar2: 0, dr: 0,
-                sr1: 0, sr2: 0, ccr: 0, fltr: 0,
-                awaiting_address: false,
-                pending_event_irq: None,
-                pending_error_irq: None,
-            }))
-        } else {
-            None
+        if !name.starts_with("I2C") {
+            return None;
         }
+
+        let ev_name = format!("{}_EV", name);
+        let er_name = format!("{}_ER", name);
+        let (event_irq, error_irq) = match name {
+            "I2C1" => (meta.irq_of(&ev_name).unwrap_or(31), meta.irq_of(&er_name).unwrap_or(32)),
+            "I2C2" => (meta.irq_of(&ev_name).unwrap_or(33), meta.irq_of(&er_name).unwrap_or(34)),
+            "I2C3" => (meta.irq_of(&ev_name).unwrap_or(72), meta.irq_of(&er_name).unwrap_or(73)),
+            _ => return None,
+        };
+
+        Some(Box::new(Self {
+            name: name.to_string(),
+            event_irq,
+            error_irq,
+            cr1: 0,
+            cr2: 0,
+            oar1: 0,
+            oar2: 0,
+            dr: 0,
+            sr1: 0,
+            sr2: 0,
+            ccr: 0,
+            trise: 0x0000_0002,
+            fltr: 0,
+            awaiting_address: false,
+            awaiting_addr_clear: false,
+            last_addr_was_read: false,
+            sr1_read_armed_for_addr_clear: false,
+            pending_event_irq: None,
+            pending_error_irq: None,
+        }))
     }
 
     fn clear_master_state(&mut self) {
         self.awaiting_address = false;
+        self.awaiting_addr_clear = false;
+        self.sr1_read_armed_for_addr_clear = false;
         self.sr1 &= !(I2C_SR1_SB | I2C_SR1_ADDR | I2C_SR1_ADD10 | I2C_SR1_BTF | I2C_SR1_RXNE | I2C_SR1_TXE);
         self.sr2 &= !(I2C_SR2_MSL | I2C_SR2_BUSY | I2C_SR2_TRA);
     }
@@ -78,12 +94,17 @@ impl I2c {
         self.trise = 0x0000_0002;
         self.fltr = 0;
         self.awaiting_address = false;
+        self.awaiting_addr_clear = false;
+        self.last_addr_was_read = false;
+        self.sr1_read_armed_for_addr_clear = false;
         self.pending_event_irq = None;
         self.pending_error_irq = None;
     }
 
     fn begin_start(&mut self) {
         self.awaiting_address = true;
+        self.awaiting_addr_clear = false;
+        self.sr1_read_armed_for_addr_clear = false;
         self.sr1 = (self.sr1 & I2C_ERROR_MASK) | I2C_SR1_SB;
         self.sr2 |= I2C_SR2_MSL | I2C_SR2_BUSY;
         self.sr2 &= !I2C_SR2_TRA;
@@ -97,15 +118,41 @@ impl I2c {
         self.cr1 &= !I2C_CR1_STOP;
     }
 
+    fn ack_address(&mut self, addr_byte: u8) {
+        self.awaiting_address = false;
+        self.awaiting_addr_clear = true;
+        self.sr1_read_armed_for_addr_clear = false;
+        self.last_addr_was_read = (addr_byte & 1) != 0;
+
+        self.cr1 &= !I2C_CR1_START;
+        self.sr1 &= !(I2C_SR1_SB | I2C_SR1_ADD10 | I2C_SR1_AF | I2C_SR1_BTF | I2C_SR1_RXNE);
+        self.sr1 |= I2C_SR1_ADDR;
+
+        self.sr2 |= I2C_SR2_MSL | I2C_SR2_BUSY;
+        if self.last_addr_was_read {
+            self.sr2 &= !I2C_SR2_TRA;
+            self.sr1 &= !I2C_SR1_TXE;
+        } else {
+            self.sr2 |= I2C_SR2_TRA;
+            self.sr1 |= I2C_SR1_TXE;
+        }
+
+        self.pending_event_irq = Some(1);
+    }
+
     fn nack_address(&mut self) {
         self.awaiting_address = false;
+        self.awaiting_addr_clear = false;
         self.cr1 &= !I2C_CR1_START;
         self.clear_master_state();
         self.sr1 |= I2C_SR1_AF;
-        // Cancel the pending SB event IRQ — firmware already consumed SB by writing DR.
-        // Without this, the SB event fires after the NACK, confusing the interrupt handler.
         self.pending_event_irq = None;
         self.pending_error_irq = Some(1);
+    }
+
+    fn schedule_btf_event(&mut self) {
+        self.sr1 |= I2C_SR1_TXE | I2C_SR1_BTF;
+        self.pending_event_irq = Some(0);
     }
 }
 
@@ -116,13 +163,30 @@ impl Peripheral for I2c {
             0x0004 => self.cr2,
             0x0008 => self.oar1,
             0x000c => self.oar2,
-            0x0010 => self.dr,
-            0x0014 => self.sr1,
-            0x0018 => self.sr2,
+            0x0010 => {
+                if (self.sr1 & I2C_SR1_BTF) != 0 && (self.sr1 & I2C_SR1_RXNE) == 0 {
+                    self.sr1 &= !I2C_SR1_BTF;
+                }
+                self.dr
+            }
+            0x0014 => {
+                if self.awaiting_addr_clear && (self.sr1 & (I2C_SR1_ADDR | I2C_SR1_ADD10)) != 0 {
+                    self.sr1_read_armed_for_addr_clear = true;
+                }
+                self.sr1
+            }
+            0x0018 => {
+                if self.awaiting_addr_clear && self.sr1_read_armed_for_addr_clear {
+                    self.sr1 &= !(I2C_SR1_ADDR | I2C_SR1_ADD10);
+                    self.awaiting_addr_clear = false;
+                    self.sr1_read_armed_for_addr_clear = false;
+                }
+                self.sr2
+            }
             0x001c => self.ccr,
             0x0020 => self.trise,
             0x0024 => self.fltr,
-            _ => 0
+            _ => 0,
         }
     }
 
@@ -147,42 +211,32 @@ impl Peripheral for I2c {
                     self.finish_stop();
                 }
 
-                if old_cr1 & I2C_CR1_START == 0 && value & I2C_CR1_START != 0 {
+                if (old_cr1 & I2C_CR1_START) == 0 && (value & I2C_CR1_START) != 0 {
                     self.begin_start();
                 }
             }
-            0x0004 => {
-                self.cr2 = value;
-            }
-            0x0008 => {
-                self.oar1 = value;
-            }
-            0x000c => {
-                self.oar2 = value;
-            }
+            0x0004 => self.cr2 = value,
+            0x0008 => self.oar1 = value,
+            0x000c => self.oar2 = value,
             0x0010 => {
                 self.dr = value & 0xff;
-
                 if self.awaiting_address {
-                    trace!("{} address phase addr=0x{:02x}: synthetic NACK", self.name, self.dr);
-                    self.nack_address();
+                    let addr = self.dr as u8;
+                    if addr == 0 {
+                        trace!("{} address phase addr=0x{:02x}: synthetic NACK", self.name, self.dr);
+                        self.nack_address();
+                    } else {
+                        self.ack_address(addr);
+                    }
+                } else {
+                    self.sr1 |= I2C_SR1_TXE;
                 }
             }
-            0x0014 => {
-                self.sr1 &= value;
-            }
-            0x0018 => {
-                self.sr2 = value;
-            }
-            0x001c => {
-                self.ccr = value;
-            }
-            0x0020 => {
-                self.trise = value;
-            }
-            0x0024 => {
-                self.fltr = value;
-            }
+            0x0014 => self.sr1 &= value,
+            0x0018 => self.sr2 = value,
+            0x001c => self.ccr = value,
+            0x0020 => self.trise = value,
+            0x0024 => self.fltr = value,
             _ => {}
         }
     }
@@ -192,11 +246,9 @@ impl Peripheral for I2c {
             if *delay > 0 {
                 *delay -= 1;
             }
-            if *delay == 0 {
+            if *delay == 0 && (self.cr2 & I2C_CR2_ITEVTEN) != 0 {
                 self.pending_event_irq = None;
-                if self.cr2 & I2C_CR2_ITEVTEN != 0 {
-                    sys.p.nvic.borrow_mut().set_intr_pending(self.event_irq);
-                }
+                sys.p.nvic.borrow_mut().set_intr_pending(self.event_irq);
             }
         }
 
@@ -204,13 +256,33 @@ impl Peripheral for I2c {
             if *delay > 0 {
                 *delay -= 1;
             }
-            if *delay == 0 {
+            if *delay == 0 && (self.cr2 & I2C_CR2_ITERREN) != 0 {
                 self.pending_error_irq = None;
-                if self.cr2 & I2C_CR2_ITERREN != 0 {
-                    sys.p.nvic.borrow_mut().set_intr_pending(self.error_irq);
-                }
+                sys.p.nvic.borrow_mut().set_intr_pending(self.error_irq);
             }
         }
+    }
+
+    fn read_dma(&mut self, _sys: &System, offset: u32, size: usize) -> VecDeque<u8> {
+        if offset != 0x0010 {
+            return VecDeque::new();
+        }
+
+        self.sr1 &= !I2C_SR1_RXNE;
+        let mut out = VecDeque::with_capacity(size);
+        out.extend(std::iter::repeat(0u8).take(size));
+        out
+    }
+
+    fn write_dma(&mut self, _sys: &System, offset: u32, value: VecDeque<u8>) {
+        if offset != 0x0010 {
+            return;
+        }
+
+        if let Some(last) = value.back().copied() {
+            self.dr = last as u32;
+        }
+        self.schedule_btf_event();
     }
 }
 
@@ -219,8 +291,8 @@ const I2C_CR1_START: u32 = 1 << 8;
 const I2C_CR1_STOP: u32 = 1 << 9;
 const I2C_CR1_SWRST: u32 = 1 << 15;
 
-const I2C_CR2_ITEVTEN: u32 = 1 << 9;
 const I2C_CR2_ITERREN: u32 = 1 << 8;
+const I2C_CR2_ITEVTEN: u32 = 1 << 9;
 
 const I2C_SR1_SB: u32 = 1 << 0;
 const I2C_SR1_ADDR: u32 = 1 << 1;
@@ -228,10 +300,16 @@ const I2C_SR1_BTF: u32 = 1 << 2;
 const I2C_SR1_ADD10: u32 = 1 << 3;
 const I2C_SR1_RXNE: u32 = 1 << 6;
 const I2C_SR1_TXE: u32 = 1 << 7;
+const I2C_SR1_BERR: u32 = 1 << 8;
+const I2C_SR1_ARLO: u32 = 1 << 9;
 const I2C_SR1_AF: u32 = 1 << 10;
+const I2C_SR1_OVR: u32 = 1 << 11;
+const I2C_SR1_TIMEOUT: u32 = 1 << 14;
+const I2C_SR1_SMBALERT: u32 = 1 << 15;
 
 const I2C_SR2_MSL: u32 = 1 << 0;
 const I2C_SR2_BUSY: u32 = 1 << 1;
 const I2C_SR2_TRA: u32 = 1 << 2;
 
-const I2C_ERROR_MASK: u32 = (1 << 8) | (1 << 9) | I2C_SR1_AF | (1 << 11) | (1 << 12) | (1 << 14) | (1 << 15);
+const I2C_ERROR_MASK: u32 =
+    I2C_SR1_BERR | I2C_SR1_ARLO | I2C_SR1_AF | I2C_SR1_OVR | (1 << 12) | I2C_SR1_TIMEOUT | I2C_SR1_SMBALERT;
