@@ -17,10 +17,24 @@ use crate::ext_devices::{ExtDevices, ExtDevice};
 use super::Peripheral;
 
 use crate::system::System;
-const USART_SR_TC: u32 = 1 << 6;
-const USART_SR_TXE: u32 = 1 << 7;
+use super::meta::DeviceMeta;
+use crate::emulator::NUM_INSTRUCTIONS;
+
+const USART_SR_RXNE: u32 = 1 << 5;  // Receive data not empty
+const USART_SR_TC: u32 = 1 << 6;    // Transmission complete
+const USART_SR_TXE: u32 = 1 << 7;   // Transmit data register empty
+const USART_SR_IDLE: u32 = 1 << 4;  // Idle line detected
 const USART_CR3_DMAT: u32 = 1 << 6;  // Transmit DMA enable
 const USART_CR3_DMAR: u32 = 1 << 5;  // Receive DMA enable
+const USART_CR1_UE: u32 = 1 << 13;   // USART enable
+const USART_CR1_TE: u32 = 1 << 3;    // Transmitter enable
+const USART_CR1_RE: u32 = 1 << 2;    // Receiver enable
+const USART_CR1_TXEIE: u32 = 1 << 7; // TXE interrupt enable
+const USART_CR1_TCIE: u32 = 1 << 6;  // TC interrupt enable
+const USART_CR1_RXNEIE: u32 = 1 << 5;// RXNE interrupt enable
+
+// TX state transitions: TXE clears on write to DR, TC clears on new DR write, then both set after "transmission"
+const TX_COMPLETION_DELAY: u64 = 10;
 
 #[derive(Default)]
 pub struct Usart {
@@ -33,42 +47,76 @@ pub struct Usart {
     cr2: u32,
     cr3: u32,
     gtpr: u32,
+    
+    // TX state machine: track when DR was written to trigger TXE/TC transitions
+    tx_active_since: Option<u64>,
+    irq: i32,
 }
 
 impl Usart {
-    pub fn new(name: &str, ext_devices: &ExtDevices) -> Option<Box<dyn Peripheral>> {
+    pub fn new(name: &str, ext_devices: &ExtDevices, meta: &DeviceMeta) -> Option<Box<dyn Peripheral>> {
         if name.starts_with("USART") || name.starts_with("UART") {
             let ext_device = ext_devices.find_serial_device(&name);
             let name = ext_device.as_ref()
                 .map(|d| d.borrow_mut().connect_peripheral(name))
                 .unwrap_or_else(|| name.to_string());
+            let irq = meta.irq_of(&name).unwrap_or_else(|| match name.as_str() {
+                "USART1" => 37, "USART2" => 38, "USART3" => 39,
+                "UART4" => 52, "UART5" => 53, "USART6" => 71,
+                "UART7" => 82, "UART8" => 83, _ => -1,
+            });
             Some(Box::new(Self {
                 name,
                 ext_device,
-                // TXE(7) and TC(6) always set — transmitter immediately ready.
-                // IDLE(4) set — line is idle since no incoming data is modeled.
-                // RXNE(5) cleared — no incoming byte until ext_device provides one.
-                sr: (1 << 7) | (1 << 6) | (1 << 4),
+                // Initial state: TXE(7) and TC(6) set (transmitter ready), IDLE(4) set, RXNE(5) cleared
+                sr: USART_SR_TXE | USART_SR_TC | USART_SR_IDLE,
+                tx_active_since: None,
+                irq,
                 ..Default::default()
             }))
         } else {
             None
         }
     }
+
+    /// Service TX state machine: transition TXE/TC based on TX timing
+    fn service_tx_state(&mut self, sys: &System) {
+        if let Some(tx_since) = self.tx_active_since {
+            let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+            if now.saturating_sub(tx_since) >= TX_COMPLETION_DELAY {
+                // TX completion delay expired: set both TXE and TC
+                self.sr |= USART_SR_TXE | USART_SR_TC;
+                self.tx_active_since = None;
+                // Signal interrupts if enabled
+                if self.irq >= 0 && (self.cr1 & USART_CR1_UE) != 0 {
+                    let txeie = (self.cr1 & USART_CR1_TXEIE) != 0;
+                    let tcie  = (self.cr1 & USART_CR1_TCIE) != 0;
+                    if txeie || tcie {
+                        sys.p.nvic.borrow_mut().set_intr_pending(self.irq);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Peripheral for Usart {
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
+        // Service TX state before reading SR
+        if offset == 0x0000 {
+            self.service_tx_state(sys);
+        }
+
         match offset {
             0x0000 => self.sr,
             0x0004 => {
-                // DR register: reading clears RXNE
+                // DR register: reading clears RXNE and IDLE
                 let v = self.ext_device.as_ref()
                     .map(|d| d.borrow_mut().read(sys, ()))
                     .unwrap_or(self.dr as u8) as u32;
 
                 self.dr = v;
-                self.sr &= !(1 << 5); // clear RXNE after read
+                self.sr &= !(USART_SR_RXNE | USART_SR_IDLE); // clear RXNE and IDLE after read
 
                 trace!("{} read={:02x}", self.name, v);
                 v
@@ -83,26 +131,43 @@ impl Peripheral for Usart {
     }
 
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
+        // Service TX state before SR write
+        if offset == 0x0000 {
+            self.service_tx_state(sys);
+        }
+
         match offset {
             0x0000 => {
-                // TXE/TC are transmitter state bits; keep them asserted in this minimal model
-                // instead of letting firmware clear them permanently through SR writes.
-                self.sr = (value & !(USART_SR_TXE | USART_SR_TC)) | USART_SR_TXE | USART_SR_TC;
+                // SR write: per RM, TC can be cleared by writing 0 to bit 6.
+                // TXE is HW-only (set by hardware after DR is shifted out), cannot be forced.
+                // RXNE is cleared by reading DR; firmware should not write it.
+                // Only allow TC clear via explicit 0-write to that bit.
+                if (value & USART_SR_TC) == 0 {
+                    self.sr &= !USART_SR_TC;
+                }
+                // Allow firmware to clear RXNE via SR write (some ChibiOS patterns do this)
+                if (value & USART_SR_RXNE) == 0 {
+                    self.sr &= !USART_SR_RXNE;
+                }
             }
             0x0004 => {
-                // DR register - handling depends on whether DMA TX is enabled
+                // DR register write: indicates TX data write
                 self.dr = value & 0xFF;
-                
+
+                // Only transmit if USART enabled (UE) and transmitter enabled (TE)
+                let tx_enabled = (self.cr1 & USART_CR1_UE) != 0 && (self.cr1 & USART_CR1_TE) != 0;
+
+                // Clear TXE on write (DR now full), clear TC (new transmission starting)
+                self.sr &= !(USART_SR_TXE | USART_SR_TC);
+                // Start TX completion timer
+                self.tx_active_since = Some(NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed));
+
                 // If DMA TX is not enabled, write directly to ext_device
-                // (If DMAT is set, DMA controller handles writes via write_dma())
-                if (self.cr3 & USART_CR3_DMAT) == 0 {
+                if tx_enabled && (self.cr3 & USART_CR3_DMAT) == 0 {
                     self.ext_device.as_ref().map(|d|
                         d.borrow_mut().write(sys, (), value as u8)
                     );
                 }
-
-                // TX is complete immediately in this minimal model.
-                self.sr |= USART_SR_TXE | USART_SR_TC;
 
                 trace!("{} write={:02x}", self.name, value as u8);
             }

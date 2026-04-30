@@ -23,7 +23,7 @@ pub struct Spi {
     pub cr1: u32,
     pub cr2: u32,
     pub rx_buffer: u32,
-    pub ready_toggle: bool,
+    pub rxne: bool,           // RXNE: receive data available
     pub ext_device: Option<Rc<RefCell<dyn ExtDevice<(), u8>>>>,
     /// Pending RX DMA destination addresses collected during RX DMA bursts.
     /// TX DMA consumes these addresses and patches RAM with real MISO bytes.
@@ -115,16 +115,18 @@ impl Peripheral for Spi {
             0x0000 => {
                 self.cr1
             }
+            0x0004 => self.cr2,
             0x0008 => {
-                // SR register
-                // receive buffer not empty
-                // transmit buffer empty
-                self.ready_toggle = !self.ready_toggle;
-                if self.ready_toggle { 0b11 } else { 0 }
+                // SR register: TXE(1)=1 always (DR empty), BSY(7)=0 always,
+                // RXNE(0) reflects whether data is available to read.
+                let rxne = if self.rxne { 1 } else { 0 };
+                let txe = 1 << 1;  // TXE always set: DR is always ready for next write
+                rxne | txe
             }
             0x000C => {
-                // DR register
+                // DR register: reading clears RXNE
                 let v = self.rx_buffer;
+                self.rxne = false;
                 if self.is_16bits() {
                     trace!("{} read={:04x?}", self.name, v as u16);
                 } else {
@@ -148,7 +150,7 @@ impl Peripheral for Spi {
                 self.cr2 = value;
             }
             0x000C => {
-                // DR register
+                // DR register write: perform SPI exchange, set RXNE
 
                 self.rx_buffer = self.ext_device.as_ref().map(|d| d.borrow_mut()).map(|mut d| {
                     if self.is_16bits() {
@@ -172,6 +174,9 @@ impl Peripheral for Spi {
                     self.ext_device.as_ref().map(|d| d.borrow_mut().write(sys, (), v));
                     trace!("{} write={:02x?}", self.name, v);
                 }
+
+                // After exchange, RX data is available
+                self.rxne = true;
             }
             _ => {}
         }

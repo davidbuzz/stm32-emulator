@@ -624,7 +624,13 @@ impl Stream {
             0x0008 => self.par,
             0x000c => self.m0ar,
             0x0010 => self.m1ar,
-            0x0014 => self.fcr,
+            0x0014 => {
+                // FCR: return stored value but update FIFO status bits [5:3].
+                // FS=100 (FIFO empty) when stream is idle; FS=001 (quarter full) when
+                // a transfer recently completed (data may still be in flight).
+                let fs = if self.cr & 1 != 0 { 0b001 } else { 0b100 };
+                (self.fcr & !(0b111 << 3)) | (fs << 3)
+            }
             _ => 0
         }
     }
@@ -673,7 +679,8 @@ impl Stream {
                 }
 
                 let ok = self.do_xfer(dma_name, stream_idx, sys);
-                let half = self.ndtr > 1;
+                // HT should fire if initial_ndtr > 1 (multi-beat transfer crosses half-way point)
+                let half = self.initial_ndtr > 1;
 
                 if self.is_double_buffer() {
                     // DBM: toggle CT (bit 19) to switch between M0AR and M1AR, reload NDTR
@@ -724,7 +731,8 @@ impl Stream {
         // Idle window expired: perform the transfer (reads available bytes from USART ext_device)
         // then decide based on circular mode whether to reload or finish.
         let ok = self.do_xfer(dma_name, stream_idx, sys);
-        let half = self.ndtr > 1;
+        // HT fires if multi-beat transfer (initial_ndtr > 1)
+        let half = self.initial_ndtr > 1;
         self.deferred_usart_rx = false;
 
         if self.is_double_buffer() {

@@ -115,7 +115,7 @@ impl Peripherals {
             .or_else(||     SysTick::new(&name))
             .or_else(||         Scb::new(&name))
             .or_else(||        Gpio::new(&name))
-            .or_else(||       Usart::new(&name, ext_devices))
+            .or_else(||       Usart::new(&name, ext_devices, meta))
             .or_else(||        Fsmc::new(&name, ext_devices))
             .or_else(||       Flash::new(&name))
             .or_else(||         Rcc::new(&name))
