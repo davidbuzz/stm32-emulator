@@ -153,6 +153,10 @@ struct OtgFsState {
     ep_txfe_was_fired: [bool; EP_COUNT],      // tracks whether TXFE fired for each pending EP transfer
     enum_stage: UsbEnumStage,
     cdc_line_buf: Vec<u8>,
+    /// RX FIFO level in words: tracks pending data for enumeration and generic transfers.
+    rx_fifo_level: u32,
+    /// TX FIFO levels per OUT endpoint: tracks space available in each OUT endpoint TX FIFO.
+    out_tx_fifo_level: [u32; EP_COUNT],
 }
 
 pub struct OtgFs {
@@ -205,6 +209,8 @@ impl OtgFs {
                 dtxfsts: [DTXFSTS_RESET_WORDS; EP_COUNT],
                 event_delay: OTG_STARTUP_EVENT_DELAY,
                 sof_delay: OTG_SOF_PERIOD,
+                rx_fifo_level: 0,
+                out_tx_fifo_level: [DTXFSTS_RESET_WORDS; EP_COUNT],
                 ..Default::default()
             };
         }
@@ -250,6 +256,23 @@ impl OtgFsState {
 
     fn maybe_raise_irq(&self, sys: &System) {
         sys.p.nvic.borrow_mut().set_intr_pending(OTG_FS_IRQ);
+    }
+
+    /// Calculate RX FIFO level: pending setup, out data, or generic transfers.
+    /// Represents number of words available in GRXSTSR[15:0] (GRXFLVL).
+    fn calculate_rx_fifo_level(&self) -> u32 {
+        match self.ep0_rx_state {
+            Ep0RxState::RxFlvlFifoPending | Ep0RxState::OutDataFifoPending => {
+                // Pending FIFO read: count remaining words after ep0_fifo_read_count.
+                let remaining = 2u32.saturating_sub(self.ep0_fifo_read_count as u32);
+                remaining
+            }
+            Ep0RxState::RxFlvlStatusPending | Ep0RxState::OutDataStatusPending => {
+                // Status pending: RX FIFO shows the PKTSTS/BCNT header word (1 word available).
+                1
+            }
+            _ => self.rx_fifo_level,
+        }
     }
 
     fn inject_startup_event(&mut self, mask: u32) {
@@ -331,6 +354,10 @@ impl OtgFsState {
 
         self.doepctl[ep] = reg;
 
+        // On EPENA clear, mark endpoint as no longer accepting OUT transfers.
+        if (value & DOEPCTL_EPENA) == 0 && (self.doepctl[ep] & DOEPCTL_EPENA) != 0 {
+            otg_debug!("DOEPCTL{ep} EPENA cleared (OUT endpoint disabled)");
+        }
     }
 
     fn update_diepctl(&mut self, ep: usize, value: u32) {
@@ -377,7 +404,16 @@ impl OtgFsState {
                     0x00 => self.diepctl.get(ep).copied().unwrap_or(0),
                     0x08 => self.diepint.get(ep).copied().unwrap_or(0),
                     0x10 => self.dieptsiz.get(ep).copied().unwrap_or(0),
-                    0x18 => self.dtxfsts.get(ep).copied().unwrap_or(0),
+                    0x18 => {
+                        // DTXFSTS: transmit FIFO status. Bits [15:0] = number of free space
+                        // locations in the IN endpoint TX FIFO (in 32-bit words).
+                        let fifo_space = if ep < EP_COUNT {
+                            self.out_tx_fifo_level[ep]
+                        } else {
+                            0x0080
+                        };
+                        fifo_space
+                    }
                     _ => 0,
                 }
             }
@@ -407,6 +443,10 @@ impl OtgFsState {
                                 info!("OTG_FS: EP{} DIEPTSIZ write value={:#010x} (usb_lld_start_in)", ep, value);
                             }
                             self.dieptsiz[ep] = value;
+                            // When DIEPTSIZ is written with valid packet count/size, restore TX FIFO space.
+                            if value != 0 && value != 0xFFFF_FFFF {
+                                self.out_tx_fifo_level[ep] = DTXFSTS_RESET_WORDS;
+                            }
                         }
                     }
                     _ => {}
@@ -456,6 +496,7 @@ impl OtgFsState {
                     Ep0RxState::RxFlvlCompletePending => {
                         self.ep0_rx_state = Ep0RxState::StupPending;
                         self.gintsts &= !GINTSTS_RXFLVL;
+                        self.rx_fifo_level = 0;
                         GRXSTSP_PKTSTS_SETUP_COMPL
                     }
                     Ep0RxState::OutDataStatusPending => {
@@ -466,6 +507,7 @@ impl OtgFsState {
                     Ep0RxState::OutCompletePending => {
                         self.ep0_rx_state = Ep0RxState::OutXfrcPending;
                         self.gintsts &= !GINTSTS_RXFLVL;
+                        self.rx_fifo_level = 0;
                         GRXSTSP_PKTSTS_OUT_COMPL
                     }
                     _ => self.grxstsr,
@@ -720,6 +762,27 @@ impl Peripheral for OtgFs {
             shared.mark_out_endpoint_interrupt(0, DOEPINT_XFRC);
             shared.ep0_rx_state = Ep0RxState::Idle;
             shared.irq_latched = false;
+        }
+
+        // Handle non-enumeration OUT transfers on generic endpoints after enumeration completes.
+        // For endpoints with EPENA and USBAEP set on DOEPCTL, simulate receiving data completion
+        // and fire XFRC interrupt if firmware has armed the endpoint.
+        if shared.enum_stage == UsbEnumStage::Configured {
+            for ep in 0..EP_COUNT {
+                if ep == 0 {
+                    continue; // EP0 control transfers handled above
+                }
+                let do_armed = shared.doepctl[ep] & (DOEPCTL_USBAEP | DOEPCTL_EPENA) != 0
+                    && shared.doeptsiz[ep] != 0;
+                
+                // Simulate a single OUT data completion per endpoint when armed and not yet interrupted.
+                if do_armed && shared.doepint[ep] & DOEPINT_XFRC == 0 && shared.rx_fifo_level == 0 {
+                    otg_debug!("OTG_FS: EP{} OUT transfer complete (generic after enum)", ep);
+                    shared.mark_out_endpoint_interrupt(ep, DOEPINT_XFRC);
+                    shared.rx_fifo_level = 0;
+                    shared.irq_latched = false;
+                }
+            }
         }
 
         if shared.ep0_in_transfer_pending && shared.diepctl[0] & DIEPCTL_EPENA != 0 {
