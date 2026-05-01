@@ -31,7 +31,7 @@
 | FMC FSMC 4-bank abstraction with external routing is missing. | low | open | Current fsmc model is stub compared to fork reference implementation. |
 | LTDC video support remains unimplemented. | low | open | Not currently required for CubeBlack runtime milestones. |
 | TIM Advanced counting modes up down and center-aligned. | low | partially implemented | Down-counting (CR1 DIR bit) and center-aligned modes (CR1 CMS bits) now supported in tick logic. Counter decrements in down mode or wraps appropriately in center-aligned. Full bidirectional and symmetric waveform modes remain simplified. |
-| TIM Update compare commutation trigger and break event semantics. | low | open | SR and DIER behavior remains minimal. |
+| TIM Update compare commutation trigger and break event semantics. | low | partially implemented | SR and DIER behavior expanded: TIF (trigger interrupt), BIF (break interrupt), and CCxOF (capture/compare overflow) detection now implemented. EGR event generation for trigger and break added. MOE transitions in BDTR can trigger break events. |
 | TIM Complementary outputs MOE break input and dead-time insertion. | low | partially implemented | BDTR register now stored and accessed; MOE and BKE bits tracked. Dead-time insertion logic (DTG) still not implemented. |
 | TIM Timer synchronization and master-slave trigger chaining. | low | open | Cross-timer link behavior is not implemented. |
 | TIM TIM1 TIM8 DMA request generation. | low | open | Advanced timer DMA request behavior still missing. |
