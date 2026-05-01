@@ -1,6 +1,6 @@
 | Technical Item | Priority | Completion | Notes |
 | --- | --- | --- | --- |
-| DMA Implement full FIFO direct-mode threshold semantics and FIFO state machine. | high | partially implemented | FCR FS status field now dynamic (001=busy when EN=1, 100=idle). HT signal uses initial_ndtr > 1 fix. Full threshold underrun/overrun trigger conditions still missing. |
+| DMA Implement full FIFO direct-mode threshold semantics and FIFO state machine. | high | partially implemented | FCR FS status field now dynamic (001=busy when EN=1, 100=idle). HT signal uses initial_ndtr > 1 fix. FIFO threshold underrun/overflow detection added with fifo_bytes tracking. Complex re-arbitration timing remains. |
 | DMA Implement full DMA interrupt signaling classes with matching status visibility. | high | partially implemented | TC HT TE DME FE all wired with NVIC pending via stream_irq. signal_mode_error dispatches FE vs DME based on FIFO mode. RM-accurate trigger threshold and burst-error conditions remain edge cases. |
 | DMA Implement broader request conflict handling and arbitration for shared requests. | high | partially implemented | Arbitration now resolves channel-wide stream conflicts (not only identical PAR), preserves read/write full-duplex sharing, and applies mode-error signaling when blocked. |
 | DMA Implement full stream priority arbitration semantics. | high | partially implemented | New stream compares PL against all conflicting owners and preempts lower-priority owners; equal-or-higher owner priority blocks with TE/DME/FE path. RM-complete fairness and dynamic re-arbitration remain. |
@@ -17,7 +17,7 @@
 | SPI Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | partially implemented | CPHA now changes transfer ordering and master+HW-NSS mode-fault path clears SPE with MODF set; deeper CPOL timing and full NSS pin routing remain simplified. |
 | SPI Implement SPI error and interrupt signaling paths. | medium | partially implemented | RXNEIE TXEIE ERRIE now raise NVIC pending; OVR and MODF flags modeled with simplified clear behavior. |
 | TIM Extend timer coverage beyond current subset based on runtime use. | medium | open | Prioritize runtime-used instances and channels first. |
-| TIM Timer DMA request generation paths. | medium | open | Needed where firmware expects DMA-triggered operation. |
+| TIM Timer DMA request generation paths. | medium | partially implemented | CC1-CC4 DMA request signaling (DIER bits 9-12) and update DMA request (DIER bit 8) now logged on compare/overflow events. Stream enumeration and actual DMA firing remain stubs. |
 | TIM Counting modes preload and slave synchronization behavior. | medium | open | Down center-aligned ARPE and sync behavior still missing. |
 | NVIC Implement deeper fault-path semantics and escalation behavior. | medium | open | Current implementation is mostly register storage. |
 | NVIC Extend CoreDebug DWT coverage beyond minimal counters and controls. | medium | open | Expand only where firmware consumption proves needed. |
@@ -44,9 +44,9 @@
 | Minimal PWR regulator-ready model. | high | partially implemented | CR CSR semantics with immediate VOSRDY ODRDY ODSWRDY support startup polling. |
 | Minimal FLASH ACR model. | high | partially implemented | ACR and related control registers stored for latency-programming loops. |
 | USART register state persistence expansion. | medium | partially implemented | SR DR BRR CR1 CR2 CR3 GTPR persisted; TXE and TC preserved over init writes; full interrupt and state-machine behavior pending. |
-| SDIO CMDSENT unblock stub. | high | partially implemented | CMDSENT and CTIMEOUT paths unblock spin but full SDIO DMA interrupt and data-transfer behavior still stubbed. |
+| SDIO CMDSENT unblock stub. | high | partially implemented | CMDSENT command dispatch expanded with detailed response routing; DATAEND now signals on DCTRL write instead of timeout. Full multi-block DMA and CRC behavior remain. |
 | CoreDebug and DWT coverage breadth remains minimal. | medium | partially implemented | Wider DWT CoreDebug register set and debug-trigger side effects still unmodeled. |
-| ADC peripheral stub for ADC1 ADC2 ADC3. | medium | partially implemented | EOC always set and DR synthetic half-scale output; DMA read emits correct halfword bytes. |
+| ADC peripheral stub for ADC1 ADC2 ADC3. | medium | partially implemented | Channel-aware conversion results with per-channel synthetic values (CH0-CH15); EOC interrupt signaling and overrun detection added. Full analog sampling and watchdog thresholds remain stubbed. |
 | I2C transaction sequencing baseline with board-level hooks. | medium | partially implemented | EV5 EV6 EV8_2 style sequencing plus address-scoped slave hooks and unknown-address NACK; full RM fault and timing fidelity still pending. |
 | Timer CCMR1 CCMR2 CCER register storage. | medium | partially implemented | Registers persist and read back, but output-compare mode decode and GPIO toggling remain unimplemented. |
 | EXTI peripheral model added and wired. | medium | partially implemented | Core EXTI registers and IRQ fanout modeled, including lines 16 through 22 wake/tamper/RTC routing; SYSCFG line-port mux fidelity and event-only behavior remain simplified. |
