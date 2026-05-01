@@ -34,6 +34,7 @@ pub mod rng;
 pub mod iwdg;
 pub mod rtc;
 pub mod can;
+pub mod eth;
 
 use adc::*;
 use rcc::*;
@@ -61,6 +62,7 @@ use rng::*;
 use iwdg::*;
 use rtc::*;
 use can::*;
+use eth::*;
 
 use std::{collections::{BTreeMap, VecDeque, HashMap}, cell::RefCell};
 use svd_parser::svd::{RegisterInfo, Device as SvdDevice};
@@ -133,6 +135,7 @@ impl Peripherals {
             .or_else(||         Iwdg::new(&name))
             .or_else(||         Rtc::new(&name))
             .or_else(||         Can::new(&name))
+            .or_else(||     Ethernet::new(&name))
         ;
 
         if let Some(p) = p {
