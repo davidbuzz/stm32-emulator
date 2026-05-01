@@ -45,6 +45,8 @@ pub struct Tim {
     rcr_count: u32,
     /// BDTR (break and dead-time register) for advanced timers: MOE, BKE, OSSR, OSSI, DTG.
     bdtr: u32,
+    /// Break condition active (BIF in SR). Set when MOE transitions from 1→0 or BRK input detected.
+    break_condition: bool,
     update_irq: Option<i32>,
     cc_irq: Option<i32>,
     last_clk: u64,
@@ -170,6 +172,9 @@ impl Tim {
             if (self.dier & (1 << 9)) != 0 {
                 self.trigger_cc_dma_request(sys, 1);
             }
+        } else if (self.sr & (1 << 1)) != 0 && check_cc(old_cnt, self.cnt, self.ccr1) {
+            // CC1 overflow: flag already set, but counter crossed threshold again
+            self.sr |= 1 << 9; // set CC1OF
         }
         // CCR2 – DIER bit 2, SR bit 2
         if (self.dier & (1 << 2)) != 0 && (self.sr & (1 << 2)) == 0 && check_cc(old_cnt, self.cnt, self.ccr2) {
@@ -180,6 +185,9 @@ impl Tim {
             if (self.dier & (1 << 10)) != 0 {
                 self.trigger_cc_dma_request(sys, 2);
             }
+        } else if (self.sr & (1 << 2)) != 0 && check_cc(old_cnt, self.cnt, self.ccr2) {
+            // CC2 overflow: flag already set, but counter crossed threshold again
+            self.sr |= 1 << 10; // set CC2OF
         }
         // CCR3 – DIER bit 3, SR bit 3
         if (self.dier & (1 << 3)) != 0 && (self.sr & (1 << 3)) == 0 && check_cc(old_cnt, self.cnt, self.ccr3) {
@@ -190,6 +198,9 @@ impl Tim {
             if (self.dier & (1 << 11)) != 0 {
                 self.trigger_cc_dma_request(sys, 3);
             }
+        } else if (self.sr & (1 << 3)) != 0 && check_cc(old_cnt, self.cnt, self.ccr3) {
+            // CC3 overflow: flag already set, but counter crossed threshold again
+            self.sr |= 1 << 11; // set CC3OF
         }
         // CCR4 – DIER bit 4, SR bit 4
         if (self.dier & (1 << 4)) != 0 && (self.sr & (1 << 4)) == 0 && check_cc(old_cnt, self.cnt, self.ccr4) {
@@ -200,6 +211,9 @@ impl Tim {
             if (self.dier & (1 << 12)) != 0 {
                 self.trigger_cc_dma_request(sys, 4);
             }
+        } else if (self.sr & (1 << 4)) != 0 && check_cc(old_cnt, self.cnt, self.ccr4) {
+            // CC4 overflow: flag already set, but counter crossed threshold again
+            self.sr |= 1 << 12; // set CC4OF
         }
 
         // Check for overflow/underflow condition
@@ -363,6 +377,27 @@ impl Peripheral for Tim {
                         }
                     }
                 }
+                // Trigger event generation: bit 6 sets TIF and fires trigger IRQ (if enabled).
+                if (value >> 6) & 1 != 0 {
+                    self.sr |= 1 << 6; // set TIF
+                    if (self.dier & (1 << 6)) != 0 {
+                        if let Some(irq) = self.irq_number() {
+                            debug!("{} EGR TG -> trigger event -> IRQ {}", self.name, irq);
+                            sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                        }
+                    }
+                }
+                // Break event generation: bit 7 sets BIF for TIM1/TIM8.
+                if (value >> 7) & 1 != 0 && (self.name == "TIM1" || self.name == "TIM8") {
+                    self.sr |= 1 << 7; // set BIF
+                    self.break_condition = true;
+                    if (self.dier & (1 << 7)) != 0 {
+                        if let Some(irq) = self.irq_number() {
+                            debug!("{} EGR BG -> break event -> IRQ {}", self.name, irq);
+                            sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                        }
+                    }
+                }
             }
             0x0018 => self.ccmr1 = value,
             0x001c => self.ccmr2 = value,
@@ -406,6 +441,28 @@ impl Peripheral for Tim {
             0x0044 => {
                 // BDTR (44H): Break and Dead-Time Register for TIM1 TIM8
                 if self.name == "TIM1" || self.name == "TIM8" {
+                    // Check if MOE bit (bit 15) is transitioning
+                    let old_moe = (self.bdtr >> 15) & 1;
+                    let new_moe = (value >> 15) & 1;
+                    
+                    // If MOE goes from 1 to 0, that could indicate break condition
+                    // (though typically break is triggered by external pin or EGR,
+                    // MOE transitions can also generate break events in some configs)
+                    if old_moe != 0 && new_moe == 0 {
+                        // MOE disabled (1→0 transition)
+                        self.sr |= 1 << 7; // set BIF
+                        self.break_condition = true;
+                        if (self.dier & (1 << 7)) != 0 {
+                            if let Some(irq) = self.irq_number() {
+                                debug!("{} BDTR MOE 1->0 -> break event -> IRQ {}", self.name, irq);
+                                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                            }
+                        }
+                    } else if old_moe == 0 && new_moe != 0 {
+                        // MOE enabled (0→1 transition) - re-enable pwm outputs
+                        debug!("{} BDTR MOE 0->1 -> outputs re-enabled", self.name);
+                    }
+                    
                     self.bdtr = value;
                     debug!("{} write BDTR=0x{:08x} (MOE={} BKE={})", 
                         self.name, value, 
