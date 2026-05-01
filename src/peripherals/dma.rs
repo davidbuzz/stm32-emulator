@@ -229,6 +229,17 @@ impl Peripheral for Dma {
                     let owners = self.find_request_conflicts(i, channel);
                     let mut blocking_owners = Vec::new();
                     for owner in owners {
+                        let owner_peri_desc = sys.p.addr_desc(self.streams[owner].par);
+                        let owner_peri_name = peripheral_name_from_desc(&owner_peri_desc);
+                        let same_peripheral_request = match (peri_name, owner_peri_name) {
+                            (Some(new_name), Some(owner_name)) => new_name == owner_name,
+                            _ => false,
+                        };
+
+                        if !same_peripheral_request {
+                            continue;
+                        }
+
                         let owner_dir = self.streams[owner].dir();
                         // Keep full-duplex read/write stream pair sharing for SPI-style transfers.
                         let full_duplex_pair =
