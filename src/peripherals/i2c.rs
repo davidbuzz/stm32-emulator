@@ -161,13 +161,17 @@ impl I2c {
     }
 
     fn nack_address(&mut self) {
+        // AF (Address Failure): firmware will see AF flag set and address not acknowledged.
+        // This allows firmware to detect and handle slave device absence or rejection.
         self.awaiting_address = false;
         self.awaiting_addr_clear = false;
         self.cr1 &= !I2C_CR1_START;
         self.clear_master_state();
         self.sr1 |= I2C_SR1_AF;
-        self.pending_event_irq = None;
+        // AF is an error condition, so signal error IRQ (not event IRQ)
         self.pending_error_irq = Some(1);
+        self.pending_event_irq = None;
+        debug!("{} address NACK detected (slave not responding or rejected)", self.name);
     }
 
     fn schedule_btf_event(&mut self) {
@@ -293,10 +297,27 @@ impl Peripheral for I2c {
                     self.sr1 |= I2C_SR1_TXE;
                 }
             }
-            0x0014 => self.sr1 &= value,
+            0x0014 => self.sr1 &= value, // Write-0-to-clear SR1 flags (BERR, ARLO, AF, OVR, TIMEOUT, etc.)
             0x0018 => self.sr2 = value,
-            0x001c => self.ccr = value,
-            0x0020 => self.trise = value,
+            0x001c => {
+                // CCR: I2C clock control register. Validates that T_high/T_low timing is configured.
+                // Firmware typically sets CCR based on I2C_CR2 FREQ field and desired I2C speed.
+                // We just store it; actual timing is emulated elsewhere.
+                if (value & 0xFFF) == 0 {
+                    // CCR=0 is invalid and could indicate corrupted/uninitialized I2C state.
+                    warn!("{} CCR set to 0 (invalid clock divider)", self.name);
+                }
+                self.ccr = value;
+            }
+            0x0020 => {
+                // TRISE: I2C rise time. Firmware sets this based on I2C_CR2 FREQ and max SCL rise time.
+                // Common pattern: TRISE = (freq_mhz + 1) where freq_mhz is in MHz.
+                // We just store it; actual timing is simplified.
+                if value == 0 {
+                    warn!("{} TRISE set to 0 (invalid rise time)", self.name);
+                }
+                self.trise = value;
+            }
             0x0024 => self.fltr = value,
             _ => {}
         }
