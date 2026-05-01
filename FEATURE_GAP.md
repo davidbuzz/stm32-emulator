@@ -24,7 +24,7 @@
 | NVIC Improve NVIC priority and enable arbitration with multiple active sources. | medium | partially implemented | External arbitration now bounds pending-bit iteration to representable IRQ range and uses safe u128 pending-bit shifts; priority competition remains simplified versus full ARM nesting semantics. |
 | Broader AZhurGIT meta adoption not complete. | medium | open | Benefits maintainability but is not immediate top runtime blocker. |
 | meta adoption remains partial beyond IRQ lookup in I2C and TIM. | medium | open | Broader register-offset migration pending. |
-| Ethernet MAC peripheral coverage is still missing versus reference baseline. | medium | open | Coverage gap remains. |
+| Ethernet MAC peripheral coverage is still missing versus reference baseline. | medium | partially implemented | MAC register stub with 15 control registers (MACCR MACFFR MACHTHR MACHTLR MACMIIAR MACMIIDR MACFCR MACVLANTR MACRWUFFR MACPMTCSR MACDBGR MACSR MACIMR MACA0HR MACA0LR) prevents MMIO crashes; full behavioral modeling remains. |
 | FLASH sector and mass erase not yet tracked previously. | low | partially implemented | SER and MER plus STRT now launch deferred operations; SNB is decoded and invalid sector numbers flag OPERR. Full backing-flash data mutation is still simplified. |
 | FLASH lock unlock key sequence not fully modeled. | low | done | KEYR two-step unlock with re-lock on bad sequence is modeled, and CR writes are ignored while LOCK is set. |
 | FLASH status flags BSY EOP and error bits not fully modeled. | low | partially implemented | BSY and EOP transition through deferred completion; OPERR is raised on invalid STRT and locked CR writes. Wider error-bit classes remain minimal. |
