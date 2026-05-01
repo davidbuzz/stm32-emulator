@@ -18,9 +18,9 @@ if [[ -f "$HOME/.cargo/env" ]]; then
 fi
 
 if [[ -x "$ROOT_DIR/target/release/stm32-emulator" ]]; then
-	emulator_cmd=("$ROOT_DIR/target/release/stm32-emulator" "${run_args[@]}")
+	emulator_cmd=("$ROOT_DIR/target/release/stm32-emulator" --console-only "${run_args[@]}")
 elif command -v cargo >/dev/null 2>&1; then
-	emulator_cmd=(cargo run --release -- "${run_args[@]}")
+	emulator_cmd=(cargo run --release -- --console-only "${run_args[@]}")
 else
 	echo "error: neither cargo nor $ROOT_DIR/target/release/stm32-emulator is available" >&2
 	echo "hint: run $ROOT_DIR/DEV_SETUP_UBUNTU.sh first" >&2
@@ -30,10 +30,14 @@ fi
 mkdir -p "$(dirname "$LOG_FILE")"
 
 run_with_logging() {
+	local run_cmd=("${emulator_cmd[@]}")
+	if command -v stdbuf >/dev/null 2>&1; then
+		run_cmd=(stdbuf -oL -eL "${run_cmd[@]}")
+	fi
 	if command -v /usr/bin/time >/dev/null 2>&1; then
-		/usr/bin/time -f "$TIME_FORMAT" "${emulator_cmd[@]}"
+		/usr/bin/time -f "$TIME_FORMAT" "${run_cmd[@]}"
 	else
-		"${emulator_cmd[@]}"
+		"${run_cmd[@]}"
 	fi
 }
 
@@ -47,6 +51,13 @@ for _ in $(seq 120); do
 	sleep 1
 done
 
+kill "$emulator_pid" 2>/dev/null || true
+for _ in $(seq 1 5); do
+	if ! kill -0 "$emulator_pid" 2>/dev/null; then
+		break
+	fi
+	sleep 1
+done
 kill -9 "$emulator_pid" 2>/dev/null || true
 wait "$emulator_pid" 2>/dev/null || true
 

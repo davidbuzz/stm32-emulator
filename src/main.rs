@@ -148,11 +148,19 @@ fn main() -> Result<()> {
     let args = Args::parse();
     init_logging(&args);
 
+    if args.console_only {
+        eprintln!("console-only: streaming USB CDC EP1 bytes (other emulator logs suppressed)");
+    }
+
     let config: Config = serde_yaml::from_str(&read_file_str(&args.config)?)
         .with_context(|| format!("Failed to parse {}", args.config))?;
 
     let device = svd_parser::parse(&read_file_str(&config.cpu.svd)?)
         .with_context(|| format!("Failed to parse {}", config.cpu.svd))?;
 
-    run_emulator(config, device, args)
+    let result = run_emulator(config, device, args);
+    if console_only() {
+        eprintln!("console-only: emulation finished");
+    }
+    result
 }

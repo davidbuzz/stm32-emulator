@@ -10,6 +10,7 @@
 // Datasheet/reference anchor: STM32F4 RM USB OTG FS chapters and the STM32F427 SVD.
 
 use std::cell::RefCell;
+use std::io::{self, Write};
 use std::rc::Rc;
 
 use crate::system::System;
@@ -912,8 +913,20 @@ pub fn fifo_write(ep: usize, word: u32) {
     }
     OTG_FS_SHARED.with(|shared| {
         let mut s = shared.borrow_mut();
-        // Accumulate bytes into the cdc_rx buffer, flush on newline.
+        // In console-only mode, stream EP1 bytes immediately so output is visible
+        // even if firmware has not emitted a newline-terminated record yet.
         let bytes = word.to_le_bytes();
+        if crate::console_only() && ep == 1 {
+            for &b in &bytes {
+                if b != 0 {
+                    let _ = io::stdout().write_all(&[b]);
+                }
+            }
+            let _ = io::stdout().flush();
+            return;
+        }
+
+        // Accumulate bytes into the cdc_rx buffer, flush on newline.
         for &b in &bytes {
             if b == b'\n' || b == b'\r' || b == 0 {
                 // Flush on LF, CR, or null (end-of-transfer padding).
