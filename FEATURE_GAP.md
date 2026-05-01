@@ -39,7 +39,7 @@
 | Core SCB state and dynamic VTOR handling. | medium | partially implemented | SCB register state and VTOR-based exception dispatch present, but fault semantics and SHPR arbitration behavior remain limited. |
 | Minimal CoreDebug and DWT cycle-counter support. | medium | partially implemented | DEMCR DWT_CTRL DWT_CYCCNT modeled with monotonic cycle counter. Extended DWT register coverage now includes CPICNT EXCCNT SLEEPCNT LSUCNT FOLDCNT PCSR and comparator state. |
 | DMA stream transfer-complete IRQ signaling to NVIC. | medium | partially implemented | TCIE path now raises STM32F427 stream IRQ; wider request-line and HT TE signaling gaps remain. |
-| Minimal OTG FS global and device bring-up. | high | partially implemented | Synthetic USBRST ENUMDNE SOF and EP0 setup plus ZLP completion modeled; FIFO payload semantics and CDC bridge remain partial. |
+| Minimal OTG FS global and device bring-up. | high | mostly implemented | USBRST ENUMDNE SOF, EP0 SETUP/DATA/ZLP completion, and full USB enumeration through Configured state now working; CDC bulk (EP1) data path and error handling remain partial. |
 | Minimal RCC startup status model. | high | partially implemented | Ready-bit synthesis and basic CFGR CSR BDCR mirroring remove early clock-init stalls; full clock-tree timing not modeled. |
 | Minimal PWR regulator-ready model. | high | partially implemented | CR CSR semantics with immediate VOSRDY ODRDY ODSWRDY support startup polling. |
 | Minimal FLASH ACR model. | high | partially implemented | ACR and related control registers stored for latency-programming loops. |
