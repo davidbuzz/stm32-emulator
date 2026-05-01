@@ -123,6 +123,62 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         let busy_loop_stop = args.busy_loop_stop;
         let mut busy_loop_pc: Option<u32> = None;
         let mut busy_loop_streak: u32 = 0;
+        let mut saw_uart_begin_impl = false;
+        let mut saw_uart_thread_rx_init = false;
+        let mut saw_thread_create_alloc = false;
+        let mut saw_uart_begin_stage_8032 = false;
+        let mut saw_uart_begin_stage_8130 = false;
+        let mut saw_uart_begin_stage_8188 = false;
+        let mut saw_uart_begin_return = false;
+        let mut saw_mainloop_post_begin = false;
+        let mut saw_mainloop_post_analog = false;
+        let mut saw_vehicle_setup = false;
+        let mut saw_init_console = false;
+        let mut saw_ap_param_setup = false;
+        let mut saw_ap_param_setup_post_read = false;
+        let mut saw_ap_param_erase_all = false;
+        let mut saw_ap_param_eeprom_write_check = false;
+        let mut saw_storageaccess_write_block = false;
+        let mut saw_chibios_storage_write_block = false;
+        let mut saw_storageaccess_read_block = false;
+        let mut saw_chibios_storage_read_block = false;
+        let mut saw_chibios_storage_open = false;
+        let mut saw_ramtron_init = false;
+        let mut saw_ramtron_read = false;
+        let mut saw_ramtron_transfer_call = false;
+        let mut saw_ramtron_transfer_return = false;
+        let mut saw_spidevice_transfer = false;
+        let mut saw_spidevice_do_transfer = false;
+        let mut saw_storage_open_post_ramtron_read = false;
+        let mut saw_storage_save_backup = false;
+        let mut saw_storage_open_post_save_backup = false;
+        let mut saw_save_backup_loop_start = false;
+        let mut saw_save_backup_after_mount_wait = false;
+        let mut saw_save_backup_open_last = false;
+        let mut saw_save_backup_open_data = false;
+        let mut saw_save_backup_write_data = false;
+        let mut saw_save_backup_done_path = false;
+        let mut save_backup_wait_seen = false;
+        let mut save_backup_wait_last_delta: u32 = 0;
+        let mut saw_f_mount_entry = false;
+        let mut saw_mount_volume_entry = false;
+        let mut saw_mount_volume_after_find = false;
+        let mut saw_mount_volume_return = false;
+        let mut saw_mount_volume_boundary_check = false;
+        let mut saw_mount_volume_boundary_fail = false;
+        let mut saw_mount_volume_totsec = false;
+        let mut saw_mount_volume_exfat_fields = false;
+        let mut mount_volume_loop_bpb_scan_hits: u32 = 0;
+        let mut mount_volume_loop_root_scan_hits: u32 = 0;
+        let mut mount_volume_loop_fat_chain_hits: u32 = 0;
+        let mut saw_find_volume_entry = false;
+        let mut saw_find_volume_return = false;
+        let mut saw_move_window_entry = false;
+        let mut saw_move_window_post_disk_read = false;
+        let mut saw_disk_read_entry = false;
+        let mut saw_disk_read_call_driver = false;
+        let mut saw_disk_read_return_from_driver = false;
+        let mut disk_read_retry_hits: u32 = 0;
         let p = sys.p.clone();
         let d = sys.d.clone();
         let interrupt_period = args.interrupt_period;
@@ -140,6 +196,333 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                 }
             }
             unsafe {
+                let pc32 = pc as u32;
+                let pc_aligned = pc32 & !1;
+                if !saw_uart_begin_impl && pc_aligned == 0x0814_7fd4 {
+                    saw_uart_begin_impl = true;
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+                    info!("TRACE UART begin impl reached pc=0x{pc32:08x} lr=0x{lr:08x}");
+                }
+                if !saw_uart_thread_rx_init && pc_aligned == 0x0814_7170 {
+                    saw_uart_thread_rx_init = true;
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+                    info!("TRACE UART thread_rx_init reached pc=0x{pc32:08x} lr=0x{lr:08x}");
+                }
+                if !saw_thread_create_alloc && pc_aligned == 0x0815_aa28 {
+                    saw_thread_create_alloc = true;
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+                    info!("TRACE thread_create_alloc reached pc=0x{pc32:08x} lr=0x{lr:08x}");
+                }
+                if !saw_uart_begin_stage_8032 && pc_aligned == 0x0814_8032 {
+                    saw_uart_begin_stage_8032 = true;
+                    info!("TRACE UART _begin stage reached pc=0x{pc32:08x}");
+                }
+                if !saw_uart_begin_stage_8130 && pc_aligned == 0x0814_8130 {
+                    saw_uart_begin_stage_8130 = true;
+                    info!("TRACE UART _begin stage reached pc=0x{pc32:08x}");
+                }
+                if !saw_uart_begin_stage_8188 && pc_aligned == 0x0814_8188 {
+                    saw_uart_begin_stage_8188 = true;
+                    info!("TRACE UART _begin stage reached pc=0x{pc32:08x}");
+                }
+                if !saw_uart_begin_return && pc_aligned == 0x0814_81c0 {
+                    saw_uart_begin_return = true;
+                    info!("TRACE UART _begin return reached pc=0x{pc32:08x}");
+                }
+                if !saw_mainloop_post_begin && pc_aligned == 0x080f_27cc {
+                    saw_mainloop_post_begin = true;
+                    info!("TRACE main_loop post-begin reached pc=0x{pc32:08x}");
+                }
+                if !saw_mainloop_post_analog && pc_aligned == 0x080f_27d4 {
+                    saw_mainloop_post_analog = true;
+                    info!("TRACE main_loop post-analoginit reached pc=0x{pc32:08x}");
+                }
+                if !saw_vehicle_setup && pc_aligned == 0x0808_2f48 {
+                    saw_vehicle_setup = true;
+                    info!("TRACE AP_Vehicle::setup reached pc=0x{pc32:08x}");
+                }
+                if !saw_init_console && pc_aligned == 0x0808_0f38 {
+                    saw_init_console = true;
+                    info!("TRACE AP_SerialManager::init_console reached pc=0x{pc32:08x}");
+                }
+                if !saw_ap_param_setup && pc_aligned == 0x0807_5748 {
+                    saw_ap_param_setup = true;
+                    info!("TRACE AP_Param::setup reached pc=0x{pc32:08x}");
+                }
+                if !saw_ap_param_setup_post_read && pc_aligned == 0x0807_575c {
+                    saw_ap_param_setup_post_read = true;
+                    info!("TRACE AP_Param::setup post-read reached pc=0x{pc32:08x}");
+                }
+                if !saw_ap_param_erase_all && pc_aligned == 0x0807_5714 {
+                    saw_ap_param_erase_all = true;
+                    info!("TRACE AP_Param::erase_all reached pc=0x{pc32:08x}");
+                }
+                if !saw_ap_param_eeprom_write_check && pc_aligned == 0x0807_4e34 {
+                    saw_ap_param_eeprom_write_check = true;
+                    info!("TRACE AP_Param::eeprom_write_check reached pc=0x{pc32:08x}");
+                }
+                if !saw_storageaccess_write_block && pc_aligned == 0x0809_737c {
+                    saw_storageaccess_write_block = true;
+                    info!("TRACE StorageAccess::write_block reached pc=0x{pc32:08x}");
+                }
+                if !saw_chibios_storage_write_block && pc_aligned == 0x080f_2dc4 {
+                    saw_chibios_storage_write_block = true;
+                    info!("TRACE ChibiOS::Storage::write_block reached pc=0x{pc32:08x}");
+                }
+                if !saw_storageaccess_read_block && pc_aligned == 0x0809_72f4 {
+                    saw_storageaccess_read_block = true;
+                    info!("TRACE StorageAccess::read_block reached pc=0x{pc32:08x}");
+                }
+                if !saw_chibios_storage_read_block && pc_aligned == 0x080f_2d38 {
+                    saw_chibios_storage_read_block = true;
+                    info!("TRACE ChibiOS::Storage::read_block reached pc=0x{pc32:08x}");
+                }
+                if !saw_chibios_storage_open && pc_aligned == 0x080f_2cdc {
+                    saw_chibios_storage_open = true;
+                    info!("TRACE ChibiOS::Storage::_storage_open reached pc=0x{pc32:08x}");
+                }
+                if !saw_ramtron_init && pc_aligned == 0x0813_8a34 {
+                    saw_ramtron_init = true;
+                    info!("TRACE AP_RAMTRON::init reached pc=0x{pc32:08x}");
+                }
+                if !saw_ramtron_read && pc_aligned == 0x0813_8bc8 {
+                    saw_ramtron_read = true;
+                    info!("TRACE AP_RAMTRON::read reached pc=0x{pc32:08x}");
+                }
+                if !saw_ramtron_transfer_call && pc_aligned == 0x0813_8ca6 {
+                    saw_ramtron_transfer_call = true;
+                    info!("TRACE AP_RAMTRON::read transfer call reached pc=0x{pc32:08x}");
+                }
+                if !saw_ramtron_transfer_return && pc_aligned == 0x0813_8ca8 {
+                    saw_ramtron_transfer_return = true;
+                    info!("TRACE AP_RAMTRON::read transfer return reached pc=0x{pc32:08x}");
+                }
+                if !saw_spidevice_transfer && pc_aligned == 0x0814_5904 {
+                    saw_spidevice_transfer = true;
+                    info!("TRACE ChibiOS::SPIDevice::transfer_fullduplex reached pc=0x{pc32:08x}");
+                }
+                if !saw_spidevice_do_transfer && pc_aligned == 0x0814_5700 {
+                    saw_spidevice_do_transfer = true;
+                    info!("TRACE ChibiOS::SPIDevice::do_transfer reached pc=0x{pc32:08x}");
+                }
+                if !saw_storage_open_post_ramtron_read && pc_aligned == 0x080f_2d14 {
+                    saw_storage_open_post_ramtron_read = true;
+                    info!("TRACE ChibiOS::Storage::_storage_open post-RAMTRON-read reached pc=0x{pc32:08x}");
+                }
+                if !saw_storage_save_backup && pc_aligned == 0x080f_2b18 {
+                    saw_storage_save_backup = true;
+                    info!("TRACE ChibiOS::Storage::_save_backup reached pc=0x{pc32:08x}");
+                }
+                if !saw_storage_open_post_save_backup && pc_aligned == 0x080f_2d1c {
+                    saw_storage_open_post_save_backup = true;
+                    info!("TRACE ChibiOS::Storage::_storage_open post-save-backup reached pc=0x{pc32:08x}");
+                }
+                if !saw_save_backup_loop_start && pc_aligned == 0x080f_2b50 {
+                    saw_save_backup_loop_start = true;
+                    info!("TRACE _save_backup loop start reached pc=0x{pc32:08x}");
+                }
+                if !saw_save_backup_after_mount_wait && pc_aligned == 0x080f_2b72 {
+                    saw_save_backup_after_mount_wait = true;
+                    info!("TRACE _save_backup after mount-wait reached pc=0x{pc32:08x}");
+                }
+                if !saw_save_backup_open_last && pc_aligned == 0x080f_2ba0 {
+                    saw_save_backup_open_last = true;
+                    info!("TRACE _save_backup open(last_storage_bak) reached pc=0x{pc32:08x}");
+                }
+                if !saw_save_backup_open_data && pc_aligned == 0x080f_2c88 {
+                    saw_save_backup_open_data = true;
+                    info!("TRACE _save_backup open(STRG*.bak) reached pc=0x{pc32:08x}");
+                }
+                if !saw_save_backup_write_data && pc_aligned == 0x080f_2cb4 {
+                    saw_save_backup_write_data = true;
+                    info!("TRACE _save_backup write(storage_blob) reached pc=0x{pc32:08x}");
+                }
+                if !saw_save_backup_done_path && pc_aligned == 0x080f_2c9e {
+                    saw_save_backup_done_path = true;
+                    info!("TRACE _save_backup done-path reached pc=0x{pc32:08x}");
+                }
+                if pc_aligned == 0x080f_2b5e {
+                    let now_ms = uc.reg_read(RegisterARM::R0).unwrap_or(0) as u32;
+                    let start_ms = uc.reg_read(RegisterARM::R5).unwrap_or(0) as u32;
+                    let delta = now_ms.wrapping_sub(start_ms);
+                    if !save_backup_wait_seen || delta >= save_backup_wait_last_delta.saturating_add(100) {
+                        save_backup_wait_seen = true;
+                        save_backup_wait_last_delta = delta;
+                        info!(
+                            "TRACE _save_backup wait progress now_ms={} start_ms={} delta_ms={}",
+                            now_ms,
+                            start_ms,
+                            delta
+                        );
+                    }
+                }
+                if !saw_f_mount_entry && pc_aligned == 0x0815_2a3c {
+                    saw_f_mount_entry = true;
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+                    let r2 = uc.reg_read(RegisterARM::R2).unwrap_or(0);
+                    info!("TRACE f_mount entry reached pc=0x{pc32:08x} lr=0x{lr:08x} opt=0x{r2:08x}");
+                }
+                if !saw_mount_volume_entry && pc_aligned == 0x0815_0ab0 {
+                    saw_mount_volume_entry = true;
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+                    let r2 = uc.reg_read(RegisterARM::R2).unwrap_or(0);
+                    info!(
+                        "TRACE mount_volume entry reached pc=0x{pc32:08x} lr=0x{lr:08x} path=0x{r0:08x} rfs_ptr=0x{r1:08x} mode=0x{r2:08x}"
+                    );
+                }
+                if !saw_mount_volume_after_find && pc_aligned == 0x0815_0b22 {
+                    saw_mount_volume_after_find = true;
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    info!("TRACE mount_volume post-find_volume reached pc=0x{pc32:08x} find_volume_res=0x{r0:08x}");
+                }
+                if !saw_mount_volume_boundary_check && pc_aligned == 0x0815_0de2 {
+                    saw_mount_volume_boundary_check = true;
+                    let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
+                    let r9 = uc.reg_read(RegisterARM::R9).unwrap_or(0);
+                    let r3 = uc.reg_read(RegisterARM::R3).unwrap_or(0);
+                    info!(
+                        "TRACE mount_volume boundary-check reached pc=0x{pc32:08x} r7=0x{r7:08x} r9=0x{r9:08x} r3=0x{r3:08x}"
+                    );
+                }
+                if !saw_mount_volume_boundary_fail && pc_aligned == 0x0815_0f12 {
+                    saw_mount_volume_boundary_fail = true;
+                    let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
+                    let r9 = uc.reg_read(RegisterARM::R9).unwrap_or(0);
+                    info!(
+                        "TRACE mount_volume boundary-fail reached pc=0x{pc32:08x} r7=0x{r7:08x} r9=0x{r9:08x}"
+                    );
+                }
+                if !saw_mount_volume_totsec && pc_aligned == 0x0815_0b5a {
+                    saw_mount_volume_totsec = true;
+                    let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
+                    let r2 = uc.reg_read(RegisterARM::R2).unwrap_or(0);
+                    let r9 = uc.reg_read(RegisterARM::R9).unwrap_or(0);
+                    info!(
+                        "TRACE mount_volume FAT totals reached pc=0x{pc32:08x} totsec_r7=0x{r7:08x} secperclus_r2=0x{r2:08x} rootent_r9=0x{r9:08x}"
+                    );
+                }
+                if !saw_mount_volume_exfat_fields && pc_aligned == 0x0815_0c48 {
+                    saw_mount_volume_exfat_fields = true;
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+                    let r6 = uc.reg_read(RegisterARM::R6).unwrap_or(0);
+                    let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
+                    info!(
+                        "TRACE mount_volume exfat fields reached pc=0x{pc32:08x} volofs_lo_r0=0x{r0:08x} volofs_hi_r1=0x{r1:08x} partbase_r6=0x{r6:08x} volsct_lo_r7=0x{r7:08x}"
+                    );
+                }
+                if !saw_find_volume_entry && pc_aligned == 0x0815_0a40 {
+                    saw_find_volume_entry = true;
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+                    let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+                    info!("TRACE find_volume entry reached pc=0x{pc32:08x} lr=0x{lr:08x} mode=0x{r1:08x}");
+                }
+                if !saw_find_volume_return && pc_aligned == 0x0815_0aac {
+                    saw_find_volume_return = true;
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    info!("TRACE find_volume return path reached pc=0x{pc32:08x} res=0x{r0:08x}");
+                }
+                if !saw_move_window_entry && pc_aligned == 0x0815_0914 {
+                    saw_move_window_entry = true;
+                    let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+                    info!("TRACE move_window entry reached pc=0x{pc32:08x} sector=0x{r1:08x}");
+                }
+                if !saw_move_window_post_disk_read && pc_aligned == 0x0815_093e {
+                    saw_move_window_post_disk_read = true;
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    info!("TRACE move_window post-disk_read reached pc=0x{pc32:08x} disk_read_res=0x{r0:08x}");
+                }
+                if !saw_disk_read_entry && pc_aligned == 0x0815_9ffc {
+                    saw_disk_read_entry = true;
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    let r2 = uc.reg_read(RegisterARM::R2).unwrap_or(0);
+                    let r3 = uc.reg_read(RegisterARM::R3).unwrap_or(0);
+                    info!(
+                        "TRACE disk_read entry reached pc=0x{pc32:08x} pdrv=0x{r0:08x} sector=0x{r2:08x} count=0x{r3:08x}"
+                    );
+                }
+                if !saw_disk_read_call_driver && pc_aligned == 0x0815_a024 {
+                    saw_disk_read_call_driver = true;
+                    let r6 = uc.reg_read(RegisterARM::R6).unwrap_or(0);
+                    let r8 = uc.reg_read(RegisterARM::R8).unwrap_or(0);
+                    let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
+                    info!(
+                        "TRACE disk_read call driver reached pc=0x{pc32:08x} callee=0x{r6:08x} sector=0x{r8:08x} count=0x{r7:08x}"
+                    );
+                }
+                if !saw_disk_read_return_from_driver && pc_aligned == 0x0815_a02c {
+                    saw_disk_read_return_from_driver = true;
+                    let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                    let r5 = uc.reg_read(RegisterARM::R5).unwrap_or(0);
+                    let mut hdr = [0u8; 16];
+                    let mut sig = [0u8; 2];
+                    let mut bps = [0u8; 2];
+                    let hdr_ok = uc.mem_read(r5, &mut hdr).is_ok();
+                    let sig_ok = uc.mem_read(r5 + 510, &mut sig).is_ok();
+                    let bps_ok = uc.mem_read(r5 + 11, &mut bps).is_ok();
+                    let sig_u16 = u16::from_le_bytes(sig);
+                    let bps_u16 = u16::from_le_bytes(bps);
+                    info!(
+                        "TRACE disk_read return from driver reached pc=0x{pc32:08x} driver_res=0x{r0:08x} buf=0x{r5:08x} hdr_ok={} sig_ok={} sig=0x{:04x} bps_ok={} bps={} hdr={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                        hdr_ok,
+                        sig_ok,
+                        sig_u16,
+                        bps_ok,
+                        bps_u16,
+                        hdr[0], hdr[1], hdr[2], hdr[3], hdr[4], hdr[5], hdr[6], hdr[7],
+                        hdr[8], hdr[9], hdr[10], hdr[11], hdr[12], hdr[13], hdr[14], hdr[15]
+                    );
+                }
+                if pc_aligned == 0x0815_a016 {
+                    disk_read_retry_hits = disk_read_retry_hits.saturating_add(1);
+                    if disk_read_retry_hits == 1 || disk_read_retry_hits % 64 == 0 {
+                        let r4 = uc.reg_read(RegisterARM::R4).unwrap_or(0);
+                        info!(
+                            "TRACE disk_read retry loop hits={} pc=0x{pc32:08x} retry_idx=0x{r4:08x}",
+                            disk_read_retry_hits
+                        );
+                    }
+                }
+                if pc_aligned == 0x0815_0c10 {
+                    mount_volume_loop_bpb_scan_hits = mount_volume_loop_bpb_scan_hits.saturating_add(1);
+                    if mount_volume_loop_bpb_scan_hits == 1 || mount_volume_loop_bpb_scan_hits % 1024 == 0 {
+                        let r3 = uc.reg_read(RegisterARM::R3).unwrap_or(0);
+                        info!(
+                            "TRACE mount_volume loop[bpb_scan] hits={} pc=0x{pc32:08x} index_r3=0x{r3:08x}",
+                            mount_volume_loop_bpb_scan_hits
+                        );
+                    }
+                }
+                if pc_aligned == 0x0815_0cf6 {
+                    mount_volume_loop_root_scan_hits = mount_volume_loop_root_scan_hits.saturating_add(1);
+                    if mount_volume_loop_root_scan_hits == 1 || mount_volume_loop_root_scan_hits % 1024 == 0 {
+                        let r6 = uc.reg_read(RegisterARM::R6).unwrap_or(0);
+                        let r7 = uc.reg_read(RegisterARM::R7).unwrap_or(0);
+                        info!(
+                            "TRACE mount_volume loop[root_scan] hits={} pc=0x{pc32:08x} ofs_r6=0x{r6:08x} entries_r7=0x{r7:08x}",
+                            mount_volume_loop_root_scan_hits
+                        );
+                    }
+                }
+                if pc_aligned == 0x0815_0d54 {
+                    mount_volume_loop_fat_chain_hits = mount_volume_loop_fat_chain_hits.saturating_add(1);
+                    if mount_volume_loop_fat_chain_hits == 1 || mount_volume_loop_fat_chain_hits % 1024 == 0 {
+                        let r6 = uc.reg_read(RegisterARM::R6).unwrap_or(0);
+                        let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+                        info!(
+                            "TRACE mount_volume loop[fat_chain] hits={} pc=0x{pc32:08x} cluster_r6=0x{r6:08x} sector_r1=0x{r1:08x}",
+                            mount_volume_loop_fat_chain_hits
+                        );
+                    }
+                }
+                if !saw_mount_volume_return && pc_aligned == 0x0815_0e9a {
+                    saw_mount_volume_return = true;
+                    let r5 = uc.reg_read(RegisterARM::R5).unwrap_or(0);
+                    info!("TRACE mount_volume return path reached pc=0x{pc32:08x} fr=0x{r5:08x}");
+                }
+
                 if busy_loop_stop {
                     let current_pc = pc as u32;
                     if busy_loop_pc == Some(current_pc) {
@@ -221,7 +604,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                 };
                 if let Some(irq) = pending_irq {
                     if irq == 67 {
-                        info!("EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop");
+                        debug!("EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop");
                     }
                     let deferred_was_empty = {
                         let mut deferred = deferred_irq.borrow_mut();
@@ -453,7 +836,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             }
 
             if irq == 67 {
-                info!("EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS={})", NUM_INSTRUCTIONS.load(Ordering::Relaxed));
+                debug!("EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS={})", NUM_INSTRUCTIONS.load(Ordering::Relaxed));
             }
             sys.p.nvic.borrow_mut().run_interrupt(&sys, irq);
             pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc after deferred irq");
@@ -477,6 +860,85 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         }
 
         if args.stop_addr == Some(pc as u32) {
+            let uc = sys.uc.borrow();
+            let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+            let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+            let r2 = uc.reg_read(RegisterARM::R2).unwrap_or(0);
+            let r3 = uc.reg_read(RegisterARM::R3).unwrap_or(0);
+            let r4 = uc.reg_read(RegisterARM::R4).unwrap_or(0);
+            let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+
+            info!(
+                "Stop address reached at pc=0x{pc:08x} r0=0x{r0:08x} r1=0x{r1:08x} r2=0x{r2:08x} r3=0x{r3:08x} r4=0x{r4:08x} lr=0x{lr:08x}"
+            );
+
+            // UART begin probe helper: when halted near AP_HAL::UARTDriver::begin(),
+            // decode the virtual target from object vtable slot +0x84.
+            if pc == 0x0804_59e4 || pc == 0x0804_59e8 {
+                let mut vtbl_buf = [0u8; 4];
+                if uc.mem_read(r0, &mut vtbl_buf).is_ok() {
+                    let vtbl = u32::from_le_bytes(vtbl_buf) as u64;
+                    let mut fn_buf = [0u8; 4];
+                    if uc.mem_read(vtbl + 0x84, &mut fn_buf).is_ok() {
+                        let callee = u32::from_le_bytes(fn_buf);
+                        info!(
+                            "UART begin dispatch: obj=0x{r0:08x} vtbl=0x{vtbl:08x} callee@+0x84=0x{callee:08x}"
+                        );
+                    }
+                }
+            }
+
+            if pc == 0x080c_213c || pc == 0x080c_2140 {
+                let read_u32 = |addr: u64| -> Option<u32> {
+                    let mut b = [0u8; 4];
+                    if uc.mem_read(addr, &mut b).is_ok() {
+                        Some(u32::from_le_bytes(b))
+                    } else {
+                        None
+                    }
+                };
+                if let Some(fs_obj) = read_u32(r0) {
+                    if let Some(vtbl) = read_u32(fs_obj as u64) {
+                        if let Some(callee) = read_u32(vtbl as u64 + 0x44) {
+                            info!(
+                                "Filesystem retry_mount dispatch: fs_obj_ptr=0x{r0:08x} obj=0x{fs_obj:08x} vtbl=0x{vtbl:08x} callee@+0x44=0x{callee:08x}"
+                            );
+                        }
+                    }
+                }
+            }
+
+            let pc_aligned = (pc as u32) & !1;
+            if (0x0807_709c..=0x0807_7110).contains(&pc_aligned) {
+                let read_u16 = |addr: u64| -> Option<u16> {
+                    let mut b = [0u8; 2];
+                    if uc.mem_read(addr, &mut b).is_ok() {
+                        Some(u16::from_le_bytes(b))
+                    } else {
+                        None
+                    }
+                };
+                let read_u32 = |addr: u64| -> Option<u32> {
+                    let mut b = [0u8; 4];
+                    if uc.mem_read(addr, &mut b).is_ok() {
+                        Some(u32::from_le_bytes(b))
+                    } else {
+                        None
+                    }
+                };
+                let num_vars = read_u16(0x2000_d330);
+                let first_free = read_u16(0x2000_d304);
+                let var_info = read_u32(0x2000_d314);
+                let defaults_info = read_u32(0x2000_d334);
+                info!(
+                    "AP_Param loop state: num_vars={:?} first_free={:?} var_info_ptr={:?} defaults_ptr={:?}",
+                    num_vars,
+                    first_free,
+                    var_info,
+                    defaults_info
+                );
+            }
+
             info!("Stop address reached, stopping");
             break;
         }

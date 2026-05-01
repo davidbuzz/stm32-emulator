@@ -1,5 +1,5 @@
 /target
-
+modules/ardupilot/
 # Reference clones (read-only, not submodules)
 modules/renode/
 modules/stm32-emulator-renode/

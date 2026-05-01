@@ -157,13 +157,7 @@ impl Rcc {
             warn!("RCC invalid PLLP encoding: {}", pllp_enc);
         }
 
-        // PLLR (system clock output divider) must be in [2..7].
-        const PLLR_MASK: u32 = 0x70000000;
-        const PLLR_SHIFT: u32 = 28;
-        let pllr = ((self.pllcfgr & PLLR_MASK) >> PLLR_SHIFT) as u8;
-        if pllr < 2 || pllr > 7 {
-            warn!("RCC invalid PLLR value: {} (must be 2-7)", pllr);
-        }
+        // STM32F427 main PLL does not use PLLR in PLLCFGR; bits [30:28] are reserved.
     }
 
     fn update_csr_ready_bits(&mut self) {

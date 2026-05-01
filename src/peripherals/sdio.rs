@@ -11,6 +11,7 @@
 
 use crate::system::System;
 use super::Peripheral;
+use std::collections::VecDeque;
 
 // SDIO_STA bits
 const STA_DTIMEOUT: u32 = 1 << 3;
@@ -31,6 +32,10 @@ const DCTRL_DTEN: u32 = 1 << 0;
 const SDIO_IRQ_NUMBER: i32 = 49;
 const SD_EJECT_RETRY_LIMIT: u32 = 100;
 const DATA_TIMEOUT_DELAY_STEPS: u8 = 4;
+const DMA2_BASE: u64 = 0x4002_6400;
+const DMA_STREAM_CR_BASE_OFFSET: u64 = 0x10;
+const DMA_STREAM_STRIDE: u64 = 0x18;
+const DMA_STREAM_COUNT: u64 = 8;
 
 const CMD_GO_IDLE_STATE: u32 = 0;
 const CMD_ALL_SEND_CID: u32 = 2;
@@ -74,6 +79,10 @@ pub struct Sdio {
     data_timeout_delay: u8,
     failed_retries: u32,
     is_ejected: bool,
+    pending_data_cmd: Option<u32>,
+    pending_sector: u32,
+    fifo_data: VecDeque<u8>,
+    data_transfer_pending: bool,
 }
 
 impl Sdio {
@@ -163,9 +172,11 @@ impl Sdio {
                 true
             }
             CMD_READ_SINGLE_BLOCK | CMD_READ_MULTIPLE_BLOCK | CMD_WRITE_BLOCK | CMD_WRITE_MULTIPLE_BLOCK => {
-                // Data transfer commands (CMD17, CMD18, CMD24, CMD25) – R1 response
+                // Data transfer commands (CMD17, CMD18, CMD24, CMD25) – R1 response.
+                // The actual transfer begins on DCTRL.DTEN; remember command context now.
                 self.set_short_response(cmd, SHORT_R1_OK);
-                // These commands will have DCTRL written to start actual data transfer
+                self.pending_data_cmd = Some(cmd);
+                self.pending_sector = self.arg;
                 true
             }
             _ => false,
@@ -176,10 +187,174 @@ impl Sdio {
             sys.p.nvic.borrow_mut().set_intr_pending(SDIO_IRQ_NUMBER);
         }
     }
+
+    fn clear_sdio_dma_en_bits(&self, sys: &System) {
+        let clear_en_if_sdio = |sys: &System, stream_base: u64| {
+            let mut cr = [0u8; 4];
+            let mut par = [0u8; 4];
+            let mut uc = sys.uc.borrow_mut();
+            if uc.mem_read(stream_base + 0x08, &mut par).is_err() {
+                return;
+            }
+            if u32::from_le_bytes(par) != 0x4001_2c80 {
+                return;
+            }
+            if uc.mem_read(stream_base, &mut cr).is_ok() {
+                let new_cr = u32::from_le_bytes(cr) & !1;
+                let _ = uc.mem_write(stream_base, &new_cr.to_le_bytes());
+            }
+        };
+
+        for stream in 0..DMA_STREAM_COUNT {
+            let stream_base = DMA2_BASE + DMA_STREAM_CR_BASE_OFFSET + stream * DMA_STREAM_STRIDE;
+            clear_en_if_sdio(sys, stream_base);
+        }
+    }
+
+    fn service_sdio_dma_read_stream(&mut self, sys: &System, stream_base: u64) {
+        let mut uc = sys.uc.borrow_mut();
+
+        let cr_addr = stream_base;
+        let ndtr_addr = stream_base + 0x04;
+        let par_addr = stream_base + 0x08;
+        let m0ar_addr = stream_base + 0x0C;
+
+        let mut b = [0u8; 4];
+        if uc.mem_read(cr_addr, &mut b).is_err() {
+            return;
+        }
+        let cr = u32::from_le_bytes(b);
+        if (cr & 1) == 0 {
+            return;
+        }
+
+        // DIR=00 means peripheral-to-memory.
+        let dir = (cr >> 6) & 0b11;
+        if dir != 0 {
+            return;
+        }
+
+        if uc.mem_read(par_addr, &mut b).is_err() {
+            return;
+        }
+        let par = u32::from_le_bytes(b);
+        if par != 0x4001_2c80 {
+            return;
+        }
+
+        if uc.mem_read(ndtr_addr, &mut b).is_err() {
+            return;
+        }
+        let mut count = u32::from_le_bytes(b) & 0xFFFF;
+        if count == 0 {
+            let _ = uc.mem_write(cr_addr, &(cr & !1).to_le_bytes());
+            return;
+        }
+
+        if uc.mem_read(m0ar_addr, &mut b).is_err() {
+            return;
+        }
+        let mut maddr = u32::from_le_bytes(b);
+        let minc = (cr & (1 << 10)) != 0;
+        let msize = match (cr >> 13) & 0b11 {
+            0b00 => 1u32,
+            0b01 => 2u32,
+            0b10 => 4u32,
+            _ => 1u32,
+        };
+
+        while count > 0 {
+            let mut beat = [0u8; 4];
+            for i in 0..(msize as usize) {
+                beat[i] = self.fifo_data.pop_front().unwrap_or(0);
+            }
+            let _ = uc.mem_write(maddr as u64, &beat[..msize as usize]);
+            if minc {
+                maddr = maddr.saturating_add(msize);
+            }
+            count -= 1;
+        }
+
+        let _ = uc.mem_write(ndtr_addr, &0u32.to_le_bytes());
+        let _ = uc.mem_write(cr_addr, &(cr & !1).to_le_bytes());
+    }
+
+    fn service_sdio_dma_reads(&mut self, sys: &System) {
+        for stream in 0..DMA_STREAM_COUNT {
+            let stream_base = DMA2_BASE + DMA_STREAM_CR_BASE_OFFSET + stream * DMA_STREAM_STRIDE;
+            self.service_sdio_dma_read_stream(sys, stream_base);
+        }
+    }
+
+    fn synth_sector(&self, sector: u32) -> [u8; 512] {
+        let mut s = [0u8; 512];
+        match sector {
+            0 => {
+                // Minimal FAT16 boot sector accepted by FatFs sanity checks.
+                s[0] = 0xEB;
+                s[1] = 0x3C;
+                s[2] = 0x90;
+                s[3..11].copy_from_slice(b"MSDOS5.0");
+                s[11..13].copy_from_slice(&512u16.to_le_bytes()); // BPB_BytsPerSec
+                s[13] = 1; // BPB_SecPerClus
+                s[14..16].copy_from_slice(&1u16.to_le_bytes()); // BPB_RsvdSecCnt
+                s[16] = 1; // BPB_NumFATs
+                s[17..19].copy_from_slice(&16u16.to_le_bytes()); // BPB_RootEntCnt
+                // Keep geometry small and self-consistent so FatFs boundary checks pass.
+                s[19..21].copy_from_slice(&128u16.to_le_bytes()); // BPB_TotSec16
+                s[21] = 0xF8; // BPB_Media
+                s[22..24].copy_from_slice(&1u16.to_le_bytes()); // BPB_FATSz16
+                s[24..26].copy_from_slice(&32u16.to_le_bytes());
+                s[26..28].copy_from_slice(&64u16.to_le_bytes());
+                s[36] = 0x80;
+                s[38] = 0x29;
+                s[39..43].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+                s[43..54].copy_from_slice(b"NO NAME    ");
+                s[54..62].copy_from_slice(b"FAT16   ");
+                s[510] = 0x55;
+                s[511] = 0xAA;
+            }
+            1 => {
+                // FAT table: reserved entries + cluster 2 marked end-of-chain.
+                s[0..2].copy_from_slice(&0xFFF8u16.to_le_bytes());
+                s[2..4].copy_from_slice(&0xFFFFu16.to_le_bytes());
+                s[4..6].copy_from_slice(&0xFFFFu16.to_le_bytes());
+            }
+            _ => {}
+        }
+        s
+    }
+
+    fn prime_fifo_for_data_transfer(&mut self) {
+        self.fifo_data.clear();
+        let Some(cmd) = self.pending_data_cmd else {
+            return;
+        };
+        if cmd != CMD_READ_SINGLE_BLOCK && cmd != CMD_READ_MULTIPLE_BLOCK {
+            return;
+        }
+        let block_count = core::cmp::max(1, self.dlen / 512);
+        for i in 0..block_count {
+            let sector = self.pending_sector.saturating_add(i);
+            let sec = self.synth_sector(sector);
+            self.fifo_data.extend(sec);
+        }
+    }
 }
 
 impl Peripheral for Sdio {
     fn step(&mut self, sys: &System) {
+        if self.data_transfer_pending {
+            self.service_sdio_dma_reads(sys);
+            if self.fifo_data.is_empty() {
+                self.sta |= STA_DATAEND;
+                self.data_timeout_delay = 0;
+                self.data_transfer_pending = false;
+                self.clear_sdio_dma_en_bits(sys);
+                self.maybe_raise_irq(sys);
+            }
+        }
+
         if self.data_timeout_delay > 0 {
             self.data_timeout_delay -= 1;
             if self.data_timeout_delay == 0 && self.mask != 0 {
@@ -268,11 +443,22 @@ impl Peripheral for Sdio {
                 self.dctrl = value;
                 self.sta &= !(STA_DTIMEOUT | STA_DATAEND | STA_STBITERR | STA_RXOVERR | STA_TXUNDERR | STA_DCRCFAIL);
                 if (value & DCTRL_DTEN) != 0 {
-                    // Data transfer enabled: simulate immediate data completion
-                    // For emulation purposes, we signal DATAEND after minimal delay to unblock firmware polls
-                    self.sta |= STA_DATAEND;
-                    self.data_timeout_delay = 0;
+                    // Data transfer enabled: prepare synthetic payload and complete when DMA consumes it.
+                    self.prime_fifo_for_data_transfer();
+                    self.service_sdio_dma_reads(_sys);
+                    if self.fifo_data.is_empty() {
+                        self.sta |= STA_DATAEND;
+                        self.data_timeout_delay = 0;
+                        self.data_transfer_pending = false;
+                        self.clear_sdio_dma_en_bits(_sys);
+                        self.maybe_raise_irq(_sys);
+                    } else {
+                        self.data_transfer_pending = true;
+                        // Keep timeout path active while waiting for DMA stream enable.
+                        self.data_timeout_delay = DATA_TIMEOUT_DELAY_STEPS;
+                    }
                 } else {
+                    self.data_transfer_pending = false;
                     self.data_timeout_delay = 0;
                 }
             }
@@ -280,8 +466,25 @@ impl Peripheral for Sdio {
                 // ICR: clear indicated status bits
                 self.sta &= !value;
             }
-            0x3C => self.mask = value,
+            0x3C => {
+                self.mask = value;
+                // If status bits were already set before the firmware unmasked IRQs,
+                // raise pending now so waiters are not stranded.
+                self.maybe_raise_irq(_sys);
+            }
             _ => {}
         }
+    }
+
+    fn read_dma(&mut self, sys: &System, offset: u32, size: usize) -> VecDeque<u8> {
+        if offset != 0x80 {
+            return super::Peripheral::read_dma(self, sys, offset, size);
+        }
+
+        let mut out = VecDeque::with_capacity(size);
+        for _ in 0..size {
+            out.push_back(self.fifo_data.pop_front().unwrap_or(0));
+        }
+        out
     }
 }

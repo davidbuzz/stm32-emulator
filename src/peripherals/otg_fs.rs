@@ -39,7 +39,7 @@ const GINTSTS_SRQINT: u32 = 1 << 30;
 const GNPTXSTS_RESET: u32 = 0x0008_0200;
 const CID_RESET: u32 = 0x0000_1000;
 const OTG_STARTUP_EVENT_DELAY: u32 = 2048;
-const OTG_SOF_PERIOD: u32 = 4096;
+const OTG_SOF_PERIOD: u32 = 168_000; // ~1ms at 168MHz
 const EP_COUNT: usize = 4;
 const DOEPINT_XFRC: u32 = 1 << 0;
 const DOEPINT_STUP: u32 = 1 << 3;
@@ -768,24 +768,6 @@ impl Peripheral for OtgFs {
         // Handle non-enumeration OUT transfers on generic endpoints after enumeration completes.
         // For endpoints with EPENA and USBAEP set on DOEPCTL, simulate receiving data completion
         // and fire XFRC interrupt if firmware has armed the endpoint.
-        if shared.enum_stage == UsbEnumStage::Configured {
-            for ep in 0..EP_COUNT {
-                if ep == 0 {
-                    continue; // EP0 control transfers handled above
-                }
-                let do_armed = shared.doepctl[ep] & (DOEPCTL_USBAEP | DOEPCTL_EPENA) != 0
-                    && shared.doeptsiz[ep] != 0;
-                
-                // Simulate a single OUT data completion per endpoint when armed and not yet interrupted.
-                if do_armed && shared.doepint[ep] & DOEPINT_XFRC == 0 && shared.rx_fifo_level == 0 {
-                    otg_debug!("OTG_FS: EP{} OUT transfer complete (generic after enum)", ep);
-                    shared.mark_out_endpoint_interrupt(ep, DOEPINT_XFRC);
-                    shared.rx_fifo_level = 0;
-                    shared.irq_latched = false;
-                }
-            }
-        }
-
         if shared.ep0_in_transfer_pending && shared.diepctl[0] & DIEPCTL_EPENA != 0 {
             info!("OTG_FS: EP0 IN ZLP XFRC (enum_stage={:?} diepctl0={:#010x})", shared.enum_stage, shared.diepctl[0]);
             shared.clear_in_endpoint_interrupt(0, DIEPINT_TXFE);
@@ -859,11 +841,12 @@ impl Peripheral for OtgFs {
             // the case where no RXFLVL is pending but other interrupt bits were just cleared.
             shared.irq_latched = false;
         } else {
-            // Level-style raise: if OTG interrupt sources remain pending, keep asserting the
-            // NVIC pending bit each step. This avoids losing delivery windows around BASEPRI/
-            // exception return timing while remaining idempotent in NVIC.
-            shared.maybe_raise_irq(sys);
-            shared.irq_latched = true;
+            // Edge-style raise: assert IRQ once for each newly pending epoch.
+            // Event producers above clear irq_latched when they introduce new sources.
+            if !shared.irq_latched {
+                shared.maybe_raise_irq(sys);
+                shared.irq_latched = true;
+            }
         }
     }
 }

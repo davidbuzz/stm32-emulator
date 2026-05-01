@@ -350,7 +350,7 @@ impl Nvic {
 
     pub fn run_interrupt(&mut self, sys: &System, irq: i32) {
         if irq == 67 || irq == 50 {
-            info!("NVIC dispatching IRQ {} vector={:#08x}", irq, Self::read_vector_addr(sys, self.vector_table_addr, irq));
+            debug!("NVIC dispatching IRQ {} vector={:#08x}", irq, Self::read_vector_addr(sys, self.vector_table_addr, irq));
         }
         let vector = Self::read_vector_addr(sys, self.vector_table_addr, irq);
 

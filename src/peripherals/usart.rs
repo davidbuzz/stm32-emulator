@@ -263,11 +263,11 @@ impl Peripheral for Usart {
                 }
             }
 
-            self.sr &= !(1 << 5);
-        } else {
-            return super::Peripheral::read_dma(self, sys, offset, size);
+            self.sr &= !USART_SR_RXNE;
         }
 
+        // For non-DR offsets or when DMAR is not enabled, return empty rather than
+        // delegating to the trait default, which resolves back to this override.
         result
     }
 

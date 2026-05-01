@@ -17,6 +17,7 @@ use super::Peripheral;
 use super::Peripherals;
 
 const USART_RX_IDLE_DISABLE_DELAY: u64 = 20_000;
+const SDIO_DMA_DEFER_DELAY: u64 = 64;
 const DMA_EN_DISABLE_DELAY: u64 = 8;
 
 #[derive(Default)]
@@ -793,7 +794,7 @@ impl Stream {
                     return StreamWriteResult::ModeError;
                 }
 
-                if self.is_deferred_usart_rx(sys) {
+                if self.is_deferred_peripheral_rx(sys) {
                     self.deferred_usart_rx = true;
                     self.deferred_since = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
                     return StreamWriteResult::Noop;
@@ -841,8 +842,12 @@ impl Stream {
         StreamWriteResult::Noop
     }
 
-    fn is_deferred_usart_rx(&self, sys: &System) -> bool {
-        self.dir() == Dir::Read && is_usart_dr_request(&sys.p.addr_desc(self.par))
+    fn is_deferred_peripheral_rx(&self, sys: &System) -> bool {
+        if self.dir() != Dir::Read {
+            return false;
+        }
+        let peri_desc = sys.p.addr_desc(self.par);
+        is_usart_dr_request(&peri_desc) || is_sdio_fifo_request(&peri_desc)
     }
 
     /// Called from Dma::step(). Returns true if a transfer completed and TC should be signaled.
@@ -852,7 +857,13 @@ impl Stream {
         }
 
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
-        if now.saturating_sub(self.deferred_since) < USART_RX_IDLE_DISABLE_DELAY {
+        let peri_desc = sys.p.addr_desc(self.par);
+        let defer_delay = if is_usart_dr_request(&peri_desc) {
+            USART_RX_IDLE_DISABLE_DELAY
+        } else {
+            SDIO_DMA_DEFER_DELAY
+        };
+        if now.saturating_sub(self.deferred_since) < defer_delay {
             return StreamStepResult::Noop;
         }
 
@@ -901,6 +912,10 @@ enum StreamStepResult {
 
 fn is_usart_dr_request(peri_desc: &str) -> bool {
     (peri_desc.contains("peri=USART") || peri_desc.contains("peri=UART")) && peri_desc.contains("reg=DR")
+}
+
+fn is_sdio_fifo_request(peri_desc: &str) -> bool {
+    peri_desc.contains("peri=SDIO") && peri_desc.contains("reg=FIFO")
 }
 
 fn peripheral_name_from_desc(desc: &str) -> Option<&str> {
