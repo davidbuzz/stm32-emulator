@@ -37,7 +37,7 @@
 | TIM TIM1 TIM8 DMA request generation. | low | open | Advanced timer DMA request behavior still missing. |
 | Minimal TIM5 TIM6 TIM7 timebase. | medium | partially implemented | Provides CR1 DIER SR CNT PSC ARR CCR1 subset, not full advanced timer model. |
 | Core SCB state and dynamic VTOR handling. | medium | partially implemented | SCB register state and VTOR-based exception dispatch present, but fault semantics and SHPR arbitration behavior remain limited. |
-| Minimal CoreDebug and DWT cycle-counter support. | medium | partially implemented | DEMCR DWT_CTRL DWT_CYCCNT modeled with monotonic cycle counter. |
+| Minimal CoreDebug and DWT cycle-counter support. | medium | partially implemented | DEMCR DWT_CTRL DWT_CYCCNT modeled with monotonic cycle counter. Extended DWT register coverage now includes CPICNT EXCCNT SLEEPCNT LSUCNT FOLDCNT PCSR and comparator state. |
 | DMA stream transfer-complete IRQ signaling to NVIC. | medium | partially implemented | TCIE path now raises STM32F427 stream IRQ; wider request-line and HT TE signaling gaps remain. |
 | Minimal OTG FS global and device bring-up. | high | partially implemented | Synthetic USBRST ENUMDNE SOF and EP0 setup plus ZLP completion modeled; FIFO payload semantics and CDC bridge remain partial. |
 | Minimal RCC startup status model. | high | partially implemented | Ready-bit synthesis and basic CFGR CSR BDCR mirroring remove early clock-init stalls; full clock-tree timing not modeled. |
@@ -45,7 +45,7 @@
 | Minimal FLASH ACR model. | high | partially implemented | ACR and related control registers stored for latency-programming loops. |
 | USART register state persistence expansion. | medium | partially implemented | SR DR BRR CR1 CR2 CR3 GTPR persisted; TXE and TC preserved over init writes; full interrupt and state-machine behavior pending. |
 | SDIO CMDSENT unblock stub. | high | partially implemented | CMDSENT command dispatch expanded with detailed response routing; DATAEND now signals on DCTRL write instead of timeout. Full multi-block DMA and CRC behavior remain. |
-| CoreDebug and DWT coverage breadth remains minimal. | medium | partially implemented | Wider DWT CoreDebug register set and debug-trigger side effects still unmodeled. |
+| CoreDebug and DWT coverage breadth remains minimal. | medium | partially implemented | Expanded DWT register coverage: CPICNT, EXCCNT, SLEEPCNT, LSUCNT, FOLDCNT, PCSR now tracked. Comparator registers (COMP0-3, MASK0-3, FUNCTION0-3) added with basic read/write support. Full comparator match logic and interrupt generation remain stubs. |
 | ADC peripheral stub for ADC1 ADC2 ADC3. | medium | partially implemented | Channel-aware conversion results with per-channel synthetic values (CH0-CH15); EOC interrupt signaling and overrun detection added. Full analog sampling and watchdog thresholds remain stubbed. |
 | I2C transaction sequencing baseline with board-level hooks. | medium | partially implemented | EV5 (SB post-START), EV6 (ADDR with ACK/NACK discrimination), EV8_2 (data byte sequencing) implemented with CR2 event/error IRQ routing. CCR/TRISE validation warnings added. Full RM fault and timing fidelity still pending. |
 | Timer CCMR1 CCMR2 CCER register storage. | medium | partially implemented | Registers persist and read back, but output-compare mode decode and GPIO toggling remain unimplemented. |
