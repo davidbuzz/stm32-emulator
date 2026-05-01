@@ -126,6 +126,46 @@ impl Rcc {
         self.cfgr = (self.cfgr & !SWS_MASK) | (sw << 2);
     }
 
+    fn validate_pll_config(&self) {
+        // PLLCFGR validation: ensure multiplier (PLLN) is in valid range [50..432].
+        const PLLN_MASK: u32 = 0x1FC0;
+        const PLLN_SHIFT: u32 = 6;
+        let plln = (self.pllcfgr & PLLN_MASK) >> PLLN_SHIFT;
+        
+        if plln < 50 || plln > 432 {
+            warn!("RCC invalid PLLN value: {} (must be 50-432)", plln);
+        }
+
+        // PLLM (input divider) must be in range [2..63].
+        let pllm = self.pllcfgr & 0x3F;
+        if pllm < 2 || pllm > 63 {
+            warn!("RCC invalid PLLM value: {} (must be 2-63)", pllm);
+        }
+
+        // PLLP (output divider) must be 2, 4, 6, or 8.
+        const PLLP_MASK: u32 = 0x00030000;
+        const PLLP_SHIFT: u32 = 16;
+        let pllp_enc = (self.pllcfgr & PLLP_MASK) >> PLLP_SHIFT;
+        let pllp = match pllp_enc {
+            0b00 => 2,
+            0b01 => 4,
+            0b10 => 6,
+            0b11 => 8,
+            _ => 0,
+        };
+        if pllp == 0 {
+            warn!("RCC invalid PLLP encoding: {}", pllp_enc);
+        }
+
+        // PLLR (system clock output divider) must be in [2..7].
+        const PLLR_MASK: u32 = 0x70000000;
+        const PLLR_SHIFT: u32 = 28;
+        let pllr = ((self.pllcfgr & PLLR_MASK) >> PLLR_SHIFT) as u8;
+        if pllr < 2 || pllr > 7 {
+            warn!("RCC invalid PLLR value: {} (must be 2-7)", pllr);
+        }
+    }
+
     fn update_csr_ready_bits(&mut self) {
         const LSION: u32 = 1 << 0;
         const LSIRDY: u32 = 1 << 1;
@@ -200,7 +240,11 @@ impl Peripheral for Rcc {
                 self.cr = value;
                 self.update_cr_ready_bits();
             }
-            0x0004 => self.pllcfgr = value,
+            0x0004 => {
+                // PLLCFGR write: validate configuration
+                self.pllcfgr = value;
+                self.validate_pll_config();
+            }
             0x0008 => {
                 self.cfgr = value;
                 self.update_cfgr_status_bits();
