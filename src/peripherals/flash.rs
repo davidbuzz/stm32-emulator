@@ -123,6 +123,7 @@ impl Peripheral for Flash {
             0x10 => {
                 if self.cr & CR_LOCK != 0 {
                     // CR writes are ignored while locked (hardware behavior).
+                    self.sr |= SR_OPERR;
                     trace!("FLASH CR write ignored (locked): value=0x{:08x}", value);
                     return;
                 }
@@ -141,12 +142,25 @@ impl Peripheral for Flash {
                     let op = if value & CR_MER != 0 { "mass erase" }
                              else if value & CR_SER != 0 {
                                  let snb = (value >> 3) & 0x1F;
+                                 if snb > 11 {
+                                     self.sr |= SR_OPERR;
+                                     self.sr &= !SR_BSY;
+                                     self.op_countdown = 0;
+                                     self.cr &= !CR_STRT;
+                                     warn!("FLASH invalid sector erase request SNB={} (CR=0x{:08x})", snb, value);
+                                     return;
+                                 }
                                  // Log SNB and return early so the borrow is clean
                                  debug!("FLASH sector erase started (SNB={} CR=0x{:08x})", snb, value);
                                  return;
                              }
                              else { "program" };
                     debug!("FLASH {} started (CR=0x{:08x})", op, value);
+                } else if value & CR_STRT != 0 {
+                    // START with no selected operation is invalid.
+                    self.sr |= SR_OPERR;
+                    self.cr &= !CR_STRT;
+                    warn!("FLASH STRT without PG/SER/MER (CR=0x{:08x})", value);
                 }
             }
             0x14 => self.optcr = value,

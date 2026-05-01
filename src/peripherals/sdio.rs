@@ -100,44 +100,72 @@ impl Sdio {
     fn handle_known_command(&mut self, cmd: u32) -> bool {
         match cmd {
             CMD_GO_IDLE_STATE => {
+                // GO_IDLE_STATE (CMD0) always returns CMDSENT (no response)
                 self.respcmd = cmd;
                 self.sta |= STA_CMDSENT;
                 true
             }
             CMD_SEND_IF_COND => {
+                // SEND_IF_COND (CMD8) – R7 response (short format)
                 self.set_short_response(cmd, SHORT_R7_IF_COND);
                 true
             }
             CMD_APP_CMD => {
+                // APP_CMD (CMD55) – R1 response (short format)
                 self.set_short_response(cmd, SHORT_R1_OK);
                 true
             }
             CMD_APP_OP_COND => {
+                // APP_OP_COND (ACMD41) – R3 response (short format, no CRC)
+                // Also set CMDSENT since APP_OP_COND doesn't require a formal command end
                 self.set_short_response(cmd, SHORT_R3_OCR_READY_HC);
+                self.sta |= STA_CMDSENT;
                 true
             }
             CMD_ALL_SEND_CID => {
+                // ALL_SEND_CID (CMD2) – R2 response (long format CID)
                 self.set_long_response(cmd, FAKE_CID);
                 true
             }
             CMD_SEND_RELATIVE_ADDR => {
+                // SEND_RELATIVE_ADDR (CMD3) – R6 response (short format with RCA)
                 self.set_short_response(cmd, SHORT_R6_RCA);
                 true
             }
             CMD_SEND_CSD => {
+                // SEND_CSD (CMD9) – R2 response (long format CSD)
                 self.set_long_response(cmd, FAKE_CSD);
                 true
             }
-            CMD_SEL_DESEL_CARD | CMD_SET_BLOCKLEN | CMD_SWITCH_OR_SET_BUS_WIDTH | CMD_SET_DSR_OR_SWITCH => {
+            CMD_SEL_DESEL_CARD => {
+                // SELECT_CARD (CMD7) – R1/R1b response
+                self.set_short_response(cmd, SHORT_R1_OK);
+                true
+            }
+            CMD_SET_BLOCKLEN => {
+                // SET_BLOCKLEN (CMD16) – R1 response
+                self.set_short_response(cmd, SHORT_R1_OK);
+                true
+            }
+            CMD_SWITCH_OR_SET_BUS_WIDTH => {
+                // SWITCH_FUNC or SET_BUS_WIDTH (CMD6) – R1b response
+                self.set_short_response(cmd, SHORT_R1_OK);
+                true
+            }
+            CMD_SET_DSR_OR_SWITCH => {
+                // SET_DSR (CMD4) – R1 response
                 self.set_short_response(cmd, SHORT_R1_OK);
                 true
             }
             CMD_SEND_STATUS => {
+                // SEND_STATUS (CMD13) – R1 response
                 self.set_short_response(cmd, SHORT_R1_TRAN);
                 true
             }
             CMD_READ_SINGLE_BLOCK | CMD_READ_MULTIPLE_BLOCK | CMD_WRITE_BLOCK | CMD_WRITE_MULTIPLE_BLOCK => {
+                // Data transfer commands (CMD17, CMD18, CMD24, CMD25) – R1 response
                 self.set_short_response(cmd, SHORT_R1_OK);
+                // These commands will have DCTRL written to start actual data transfer
                 true
             }
             _ => false,
@@ -240,7 +268,10 @@ impl Peripheral for Sdio {
                 self.dctrl = value;
                 self.sta &= !(STA_DTIMEOUT | STA_DATAEND | STA_STBITERR | STA_RXOVERR | STA_TXUNDERR | STA_DCRCFAIL);
                 if (value & DCTRL_DTEN) != 0 {
-                    self.data_timeout_delay = DATA_TIMEOUT_DELAY_STEPS;
+                    // Data transfer enabled: simulate immediate data completion
+                    // For emulation purposes, we signal DATAEND after minimal delay to unblock firmware polls
+                    self.sta |= STA_DATAEND;
+                    self.data_timeout_delay = 0;
                 } else {
                     self.data_timeout_delay = 0;
                 }

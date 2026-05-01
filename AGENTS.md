@@ -82,15 +82,21 @@ Repository guidance for AI coding agents working in this project.
 4. Re-run and compare logs against baseline.
 5. Keep changes minimal and board-targeted when possible.
 
-## Continuation rule
+## Continuation rule (MANDATORY — DO NOT DEVIATE)
 
+- **PRIMARY RULE**: Never call `task_complete` while the TODO list has any unchecked items or items marked `in-progress`.
+- **COROLLARY**: Never call `task_complete` while `FEATURE_GAP.md` has unresolved items still marked `open` or `partially implemented`.
 - Do not stop after fixing one blocker if boot/runtime progress simply exposes the next actionable blocker.
 - Treat "fixed one blocker, found the next blocker" as an in-progress state, not a completion state.
 - Continue immediately into the next highest-confidence blocker unless a hard external blocker appears or the operator explicitly asks to pause.
 - If the operator says `continue`, treat that as an explicit instruction to resume work immediately rather than a conversational checkpoint.
 - Use `FEATURE_GAP.md` as a handover document only when ending is actually necessary, not as a reason to stop early.
 - Do not treat a local success marker, a validation pass, or an instruction-hook reminder about `task_complete` as permission to stop while the repo TODO list still has open items or `FEATURE_GAP.md` still has an actionable next blocker.
-- `task_complete` is only appropriate when the operator asked to end, or when both the current TODO list and the next actionable `FEATURE_GAP.md` work item have been exhausted or are externally blocked.
+- **HARD STOP CHECK**: Before calling `task_complete`, verify:
+  1. All TODO items are marked `completed` (none `not-started` or `in-progress`)
+  2. All FEATURE_GAP.md items are marked `done` (none `open` or `partially implemented`)
+  3. The operator explicitly asked to stop OR both conditions above are fully satisfied
+  4. If any of these fail, mark the next TODO item `in-progress` and continue work immediately
 
 ## STM32F4 reference docs in this repo
 

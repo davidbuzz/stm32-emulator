@@ -93,15 +93,21 @@ tail -40 ardu.cubeblack.log
 4. Re-run and compare logs against baseline.
 5. Keep changes minimal and board-targeted when possible.
 
-## Continuation Rule
+## Continuation Rule (MANDATORY — DO NOT DEVIATE)
 
+- **PRIMARY RULE**: Never call `task_complete` while the TODO list has any unchecked items or items marked `in-progress`.
+- **COROLLARY**: Never call `task_complete` while `FEATURE_GAP.md` has unresolved items still marked `open` or `partially implemented`.
 - Do not end the work merely because one blocker was fixed and a new blocker became visible.
 - "One blocker fixed, next blocker identified" means continue working.
 - If the operator sends `continue`, resume the next concrete step immediately; do not treat it as a prompt to summarize and stop.
 - Only stop when the operator asks to stop, or when the next step is blocked by something external that cannot be resolved inside the repo.
 - `FEATURE_GAP.md` is the backlog and handover document when a handoff is required; it is not a stop signal by itself.
 - A clean bounded validation run or a reminder to call `task_complete` is not, by itself, a stop condition when the TODO list is still open or `FEATURE_GAP.md` still contains an actionable next blocker.
-- Only call `task_complete` after the operator asked to end, or when the current TODO list and the next actionable `FEATURE_GAP.md` work item are both finished or genuinely externally blocked.
+- **HARD STOP CHECK**: Before calling `task_complete`, verify:
+  1. All TODO items are marked `completed` (none `not-started` or `in-progress`)
+  2. All FEATURE_GAP.md items are marked `done` (none `open` or `partially implemented`)
+  3. The operator explicitly asked to stop OR both conditions above are fully satisfied
+  4. If any of these fail, mark the next TODO item `in-progress` and continue work immediately
 
 ## Reference docs
 

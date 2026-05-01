@@ -17,13 +17,34 @@ use crate::ext_devices::ExtDevices;
 use std::{rc::Rc, cell::RefCell};
 use std::collections::VecDeque;
 
+const SPI_CR1_CPHA: u32 = 1 << 0;
+const SPI_CR1_MSTR: u32 = 1 << 2;
+const SPI_CR1_SPE: u32 = 1 << 6;
+const SPI_CR1_SSI: u32 = 1 << 8;
+const SPI_CR1_SSM: u32 = 1 << 9;
+
+const SPI_CR2_RXDMAEN: u32 = 1 << 0;
+const SPI_CR2_TXDMAEN: u32 = 1 << 1;
+const SPI_CR2_ERRIE: u32 = 1 << 5;
+const SPI_CR2_RXNEIE: u32 = 1 << 6;
+const SPI_CR2_TXEIE: u32 = 1 << 7;
+
+const SPI_SR_RXNE: u32 = 1 << 0;
+const SPI_SR_TXE: u32 = 1 << 1;
+const SPI_SR_MODF: u32 = 1 << 5;
+const SPI_SR_OVR: u32 = 1 << 6;
+const SPI_SR_BSY: u32 = 1 << 7;
+
 #[derive(Default)]
 pub struct Spi {
     pub name: String,
     pub cr1: u32,
     pub cr2: u32,
+    pub sr: u32,
     pub rx_buffer: u32,
     pub rxne: bool,           // RXNE: receive data available
+    pub ovr: bool,
+    pub modf: bool,
     pub ext_device: Option<Rc<RefCell<dyn ExtDevice<(), u8>>>>,
     /// Pending RX DMA destination addresses collected during RX DMA bursts.
     /// TX DMA consumes these addresses and patches RAM with real MISO bytes.
@@ -46,6 +67,59 @@ impl Spi {
     pub fn is_16bits(&self) -> bool {
         self.cr1 & (1 << 11) != 0
     }
+
+    fn irq(&self) -> Option<i32> {
+        Some(match self.name.as_str() {
+            "SPI1" => 35,
+            "SPI2" => 36,
+            "SPI3" => 51,
+            "SPI4" => 84,
+            "SPI5" => 85,
+            "SPI6" => 86,
+            _ => return None,
+        })
+    }
+
+    fn check_mode_fault(&mut self) {
+        let master = (self.cr1 & SPI_CR1_MSTR) != 0;
+        let hw_nss = (self.cr1 & SPI_CR1_SSM) == 0;
+        let nss_low = (self.cr1 & SPI_CR1_SSI) == 0;
+        if master && hw_nss && nss_low {
+            self.modf = true;
+            // Hardware clears SPE on mode fault.
+            self.cr1 &= !SPI_CR1_SPE;
+        }
+    }
+
+    fn build_sr(&self) -> u32 {
+        let mut sr = SPI_SR_TXE;
+        if self.rxne {
+            sr |= SPI_SR_RXNE;
+        }
+        if self.ovr {
+            sr |= SPI_SR_OVR;
+        }
+        if self.modf {
+            sr |= SPI_SR_MODF;
+        }
+        if (self.sr & SPI_SR_BSY) != 0 {
+            sr |= SPI_SR_BSY;
+        }
+        sr
+    }
+
+    fn maybe_raise_irq(&self, sys: &System) {
+        let Some(irq) = self.irq() else {
+            return;
+        };
+        let sr = self.build_sr();
+        let rxne_irq = (self.cr2 & SPI_CR2_RXNEIE) != 0 && (sr & SPI_SR_RXNE) != 0;
+        let txe_irq = (self.cr2 & SPI_CR2_TXEIE) != 0 && (sr & SPI_SR_TXE) != 0;
+        let err_irq = (self.cr2 & SPI_CR2_ERRIE) != 0 && (sr & (SPI_SR_OVR | SPI_SR_MODF)) != 0;
+        if rxne_irq || txe_irq || err_irq {
+            sys.p.nvic.borrow_mut().set_intr_pending(irq);
+        }
+    }
 }
 
 impl Peripheral for Spi {
@@ -58,7 +132,7 @@ impl Peripheral for Spi {
     /// For receive-only DMA (TXDMAEN clear), generate MISO by sending dummy 0xFF writes.
     fn read_dma(&mut self, sys: &System, offset: u32, size: usize) -> std::collections::VecDeque<u8> {
         if offset == 0x000C {
-            let txdmaen = self.cr2 & (1 << 1) != 0;
+            let txdmaen = self.cr2 & SPI_CR2_TXDMAEN != 0;
             if txdmaen {
                 // Full-duplex exchange: write_dma will handle the actual exchange
                 return std::collections::VecDeque::new();
@@ -108,6 +182,9 @@ impl Peripheral for Spi {
                 self.rx_buffer = last as u32;
             }
         }
+        self.rxne = !rx_bytes.is_empty();
+        self.sr &= !SPI_SR_BSY;
+        self.maybe_raise_irq(sys);
     }
 
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
@@ -117,16 +194,14 @@ impl Peripheral for Spi {
             }
             0x0004 => self.cr2,
             0x0008 => {
-                // SR register: TXE(1)=1 always (DR empty), BSY(7)=0 always,
-                // RXNE(0) reflects whether data is available to read.
-                let rxne = if self.rxne { 1 } else { 0 };
-                let txe = 1 << 1;  // TXE always set: DR is always ready for next write
-                rxne | txe
+                self.build_sr()
             }
             0x000C => {
                 // DR register: reading clears RXNE
                 let v = self.rx_buffer;
                 self.rxne = false;
+                // Simplified OVR clear path for firmware polling loops.
+                self.ovr = false;
                 if self.is_16bits() {
                     trace!("{} read={:04x?}", self.name, v as u16);
                 } else {
@@ -144,39 +219,86 @@ impl Peripheral for Spi {
             0x0000 => {
                 // CR1 register
                 self.cr1 = value;
+                self.check_mode_fault();
+                self.maybe_raise_irq(sys);
             }
             0x0004 => {
                 // CR2 register — track TXDMAEN (bit 1) and RXDMAEN (bit 0) for DMA mode detection
                 self.cr2 = value;
+                self.maybe_raise_irq(sys);
             }
             0x000C => {
                 // DR register write: perform SPI exchange, set RXNE
+                if (self.cr1 & SPI_CR1_SPE) == 0 {
+                    // Ignore writes while disabled.
+                    return;
+                }
+                self.check_mode_fault();
+                if self.modf {
+                    self.maybe_raise_irq(sys);
+                    return;
+                }
+
+                // Writing while previous RX data is unread raises overrun.
+                if self.rxne {
+                    self.ovr = true;
+                }
+
+                self.sr |= SPI_SR_BSY;
+
+                let cpha = (self.cr1 & SPI_CR1_CPHA) != 0;
+                let (rx_buffer, tx_first) = if cpha {
+                    // CPHA=1 samples later in the cycle: write first, then read response.
+                    (true, true)
+                } else {
+                    // CPHA=0 uses existing behavior: read first, then shift out MOSI.
+                    (true, false)
+                };
 
                 self.rx_buffer = self.ext_device.as_ref().map(|d| d.borrow_mut()).map(|mut d| {
                     if self.is_16bits() {
-                        let h = d.read(sys, ()) as u32;
-                        let l = d.read(sys, ()) as u32;
-                        (h << 8) | l
+                        if tx_first {
+                            d.write(sys, (), (value >> 8) as u8);
+                            d.write(sys, (), value as u8);
+                            let h = d.read(sys, ()) as u32;
+                            let l = d.read(sys, ()) as u32;
+                            (h << 8) | l
+                        } else {
+                            let h = d.read(sys, ()) as u32;
+                            let l = d.read(sys, ()) as u32;
+                            (h << 8) | l
+                        }
                     } else {
-                        d.read(sys, ()) as u32
+                        if tx_first {
+                            d.write(sys, (), value as u8);
+                            d.read(sys, ()) as u32
+                        } else {
+                            d.read(sys, ()) as u32
+                        }
                     }
                 }).unwrap_or(0);
 
                 if self.is_16bits() {
-                    self.ext_device.as_ref().map(|d| d.borrow_mut()).map(|mut d| {
-                        d.write(sys, (), (value >> 8) as u8);
-                        d.write(sys, (), value as u8);
-                    });
+                    if !tx_first {
+                        self.ext_device.as_ref().map(|d| d.borrow_mut()).map(|mut d| {
+                            d.write(sys, (), (value >> 8) as u8);
+                            d.write(sys, (), value as u8);
+                        });
+                    }
 
                     trace!("{} write={:04x?}", self.name, value as u16);
                 } else {
                     let v = value as u8;
-                    self.ext_device.as_ref().map(|d| d.borrow_mut().write(sys, (), v));
+                    if !tx_first {
+                        self.ext_device.as_ref().map(|d| d.borrow_mut().write(sys, (), v));
+                    }
                     trace!("{} write={:02x?}", self.name, v);
                 }
 
                 // After exchange, RX data is available
-                self.rxne = true;
+                self.rxne = rx_buffer;
+                self.sr &= !SPI_SR_BSY;
+                self.maybe_raise_irq(sys);
             }
             _ => {}
         }

@@ -41,9 +41,13 @@ impl Exti {
             4  => Some(10),
             5..=9  => Some(23),   // EXTI9_5
             10..=15 => Some(40),  // EXTI15_10
-            // Lines 16-22 route to: PVD(1), RTC_ALARM(41), USB_OTG_FS_WAKEUP(42),
-            // ETH_WAKEUP(62), USB_OTG_HS_WAKEUP(76), RTC_TAMPER(2), RTC_WUT(3).
-            // These are not wired through the standard GPIO EXTI path, so leave unimplemented.
+            16 => Some(1),   // PVD
+            17 => Some(41),  // RTC Alarm via EXTI17
+            18 => Some(42),  // OTG_FS_WKUP
+            19 => Some(62),  // ETH_WKUP
+            20 => Some(76),  // OTG_HS_WKUP
+            21 => Some(2),   // TAMP_STAMP
+            22 => Some(3),   // RTC_WKUP
             _ => None,
         }
     }

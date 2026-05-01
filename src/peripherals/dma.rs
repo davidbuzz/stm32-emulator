@@ -283,8 +283,11 @@ impl Peripheral for Dma {
                         }
                         self.signal_tc(sys, i);
                     }
-                    StreamWriteResult::TransferError => {
+                    StreamWriteResult::ModeError => {
                         self.signal_mode_error(sys, i);
+                    }
+                    StreamWriteResult::TransferError => {
+                        self.signal_te(sys, i);
                     }
                     StreamWriteResult::Noop => {}
                 }
@@ -306,6 +309,9 @@ struct Stream {
     deferred_usart_rx: bool,
     deferred_since: u64,
     disable_requested_at: Option<u64>,
+    // FIFO state tracking for threshold violation detection
+    fifo_bytes: usize,
+    fifo_error_pending: bool,
 }
 
 impl Stream {
@@ -360,6 +366,14 @@ impl Stream {
 
     fn minc(&self) -> bool {
         self.cr & (1 << 10) != 0
+    }
+
+    fn pburst(&self) -> u8 {
+        ((self.cr >> 21) & 0b11) as u8
+    }
+
+    fn mburst(&self) -> u8 {
+        ((self.cr >> 23) & 0b11) as u8
     }
 
     fn pinc(&self) -> bool {
@@ -430,13 +444,66 @@ impl Stream {
         std::cmp::max(1, fifo_bytes / std::cmp::max(1, beat_bytes))
     }
 
+    /// Check if a transfer would violate FIFO threshold constraints.
+    /// For Read (P2M): check if incoming data would exceed FIFO capacity.
+    /// For Write (M2P): check if FIFO has enough data for the requested transfer.
+    /// Returns true if threshold would be violated (should signal FE).
+    fn would_violate_fifo_threshold(&self, beats_to_transfer: usize) -> bool {
+        if !self.fifo_enabled() || beats_to_transfer == 0 {
+            return false;
+        }
+
+        let beat_bytes = std::cmp::max(self.psize(), self.msize());
+        let incoming_bytes = beats_to_transfer * beat_bytes;
+        let fifo_capacity = self.fifo_threshold_words() * 4;
+        let threshold = fifo_capacity;
+
+        let dir = self.dir();
+        match dir {
+            Dir::Read => {
+                // P2M: check if FIFO can accommodate incoming data
+                // Overflow occurs if accumulated FIFO data + incoming would exceed threshold
+                self.fifo_bytes + incoming_bytes > threshold
+            }
+            Dir::Write => {
+                // M2P: check if FIFO has enough data for outgoing transfer
+                // Underrun occurs if we need to send but FIFO not full enough
+                self.fifo_bytes < incoming_bytes
+            }
+            _ => false,
+        }
+    }
+
+    fn fifo_status_bits(&self) -> u32 {
+        // FS encoding (SxFCR bits [5:3]):
+        // 000 <1/4, 001 1/4, 010 1/2, 011 3/4, 100 empty, 101 full
+        if !self.fifo_enabled() || (self.cr & 1) == 0 || self.ndtr == 0 {
+            return 0b100;
+        }
+
+        let chunk_beats = self.transfer_beats_per_chunk();
+        let beat_bytes = std::cmp::max(self.psize(), self.msize());
+        let rem_beats = (self.ndtr as usize) % chunk_beats;
+        let active_beats = if rem_beats == 0 { chunk_beats } else { rem_beats };
+        let bytes = active_beats * beat_bytes;
+        let words = std::cmp::min(4, (bytes + 3) / 4);
+
+        match words {
+            0 => 0b100,
+            1 => 0b001,
+            2 => 0b010,
+            3 => 0b011,
+            _ => 0b101,
+        }
+    }
+
     /// Perform one complete DMA transfer respecting PINC/MINC.
     /// For P2M (Read): NDTR beats, each reading psize bytes from peripheral (PINC) into
     ///   msize bytes at memory (MINC). Total bytes: psize*NDTR from peri, msize*NDTR to mem.
     /// For M2P (Write): NDTR beats, reading msize bytes from memory (MINC), writing psize
     ///   bytes to peripheral (PINC).
     /// For MemCopy: source and destination both increment by msize per beat.
-    fn do_xfer(&self, dma_name: &str, stream_idx: usize, sys: &System) -> bool {
+    fn do_xfer(&mut self, dma_name: &str, stream_idx: usize, sys: &System) -> bool {
         let dir = self.dir();
         let mut mem_addr = self.data_addr();
         let mut peri_addr = self.par;
@@ -466,6 +533,21 @@ impl Stream {
 
         let mut ok = true;
         let chunk_beats = self.transfer_beats_per_chunk();
+
+        // Check FIFO threshold constraints before starting transfer
+        if self.would_violate_fifo_threshold(chunk_beats) {
+            self.fifo_error_pending = true;
+            debug!(
+                "{} stream={} FIFO threshold violation: would_violate_threshold={} fifo_bytes={} dir={:?}",
+                dma_name,
+                stream_idx,
+                chunk_beats,
+                self.fifo_bytes,
+                dir
+            );
+            // Signal FEIF but still attempt transfer (RM behavior)
+            return false;
+        }
 
         if log::log_enabled!(log::Level::Debug) {
             debug!("{} xfer channel={} peri_{} dir={:?} mem=0x{:08x} ndtr={} psize={} msize={} circ={} minc={} pinc={} fifo={} fth_words={} chunk_beats={}",
@@ -604,6 +686,24 @@ impl Stream {
             remaining_beats -= beats;
         }
 
+        // Update FIFO byte tracking after transfer
+        if ok && self.fifo_enabled() {
+            let beat_bytes = std::cmp::max(psize, msize);
+            let transferred_bytes = chunk_beats * beat_bytes;
+            match dir {
+                Dir::Read => {
+                    // P2M: FIFO receives incoming data
+                    self.fifo_bytes = self.fifo_bytes.saturating_add(transferred_bytes);
+                    self.fifo_bytes = std::cmp::min(self.fifo_bytes, self.fifo_threshold_words() * 4);
+                }
+                Dir::Write => {
+                    // M2P: FIFO is drained by outgoing data
+                    self.fifo_bytes = self.fifo_bytes.saturating_sub(transferred_bytes);
+                }
+                _ => {}
+            }
+        }
+
         ok
     }
 
@@ -639,7 +739,7 @@ impl Stream {
                 // FCR: return stored value but update FIFO status bits [5:3].
                 // FS=100 (FIFO empty) when stream is idle; FS=001 (quarter full) when
                 // a transfer recently completed (data may still be in flight).
-                let fs = if self.cr & 1 != 0 { 0b001 } else { 0b100 };
+                let fs = self.fifo_status_bits();
                 (self.fcr & !(0b111 << 3)) | (fs << 3)
             }
             _ => 0
@@ -683,6 +783,16 @@ impl Stream {
 
                 self.deferred_usart_rx = false;
 
+                if self.dir() == Dir::Invalid {
+                    return StreamWriteResult::ModeError;
+                }
+
+                // In STM32F4 direct mode, burst transfers require FIFO mode.
+                // Reject this configuration and route to DME/FE signaling path.
+                if !self.fifo_enabled() && (self.pburst() != 0 || self.mburst() != 0) {
+                    return StreamWriteResult::ModeError;
+                }
+
                 if self.is_deferred_usart_rx(sys) {
                     self.deferred_usart_rx = true;
                     self.deferred_since = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
@@ -690,6 +800,13 @@ impl Stream {
                 }
 
                 let ok = self.do_xfer(dma_name, stream_idx, sys);
+                
+                // If FIFO threshold was violated, signal FE and return error
+                if self.fifo_error_pending {
+                    self.fifo_error_pending = false;
+                    return StreamWriteResult::ModeError;
+                }
+                
                 // HT should fire if initial_ndtr > 1 (multi-beat transfer crosses half-way point)
                 let half = self.initial_ndtr > 1;
 
@@ -773,6 +890,7 @@ enum StreamWriteResult {
     Noop,
     Completed { half: bool },
     TransferError,
+    ModeError,
 }
 
 enum StreamStepResult {

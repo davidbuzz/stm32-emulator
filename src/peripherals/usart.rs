@@ -29,9 +29,12 @@ const USART_CR3_DMAR: u32 = 1 << 5;  // Receive DMA enable
 const USART_CR1_UE: u32 = 1 << 13;   // USART enable
 const USART_CR1_TE: u32 = 1 << 3;    // Transmitter enable
 const USART_CR1_RE: u32 = 1 << 2;    // Receiver enable
+const USART_CR1_M: u32 = 1 << 12;    // Word length (0=8 data bits, 1=9 data bits)
+const USART_CR1_PCE: u32 = 1 << 10;  // Parity control enable
 const USART_CR1_TXEIE: u32 = 1 << 7; // TXE interrupt enable
 const USART_CR1_TCIE: u32 = 1 << 6;  // TC interrupt enable
 const USART_CR1_RXNEIE: u32 = 1 << 5;// RXNE interrupt enable
+const USART_CR2_STOP_MASK: u32 = 0b11 << 12;
 
 // Default TX latency used when BRR has not been configured yet.
 const TX_COMPLETION_DELAY_DEFAULT: u64 = 10;
@@ -90,7 +93,22 @@ impl Usart {
         let mantissa = (self.brr >> 4) & 0x0fff;
         let fraction = self.brr & 0x000f;
         let usartdiv_x16 = (mantissa << 4) | fraction;
-        let raw_delay = (usartdiv_x16 as u64) / 2;
+        // Base delay from BRR divider.
+        let base_delay = (usartdiv_x16 as u64) / 2;
+
+        // Fold configured frame length into the latency estimate so CR1/CR2
+        // programming (word length, parity, stop bits) influences TXE/TC timing.
+        let data_bits = if (self.cr1 & USART_CR1_M) != 0 { 9u64 } else { 8u64 };
+        let parity_bits = if (self.cr1 & USART_CR1_PCE) != 0 { 1u64 } else { 0u64 };
+        let stop_half_bits = match (self.cr2 & USART_CR2_STOP_MASK) >> 12 {
+            0b00 => 2u64, // 1 stop bit
+            0b01 => 1u64, // 0.5 stop bit
+            0b10 => 4u64, // 2 stop bits
+            0b11 => 3u64, // 1.5 stop bits
+            _ => 2u64,
+        };
+        let frame_half_bits = 2u64 + (data_bits * 2) + (parity_bits * 2) + stop_half_bits;
+        let raw_delay = (base_delay.saturating_mul(frame_half_bits)).saturating_div(20);
 
         raw_delay.clamp(2, 128)
     }
@@ -112,6 +130,21 @@ impl Usart {
                     }
                 }
             }
+        }
+    }
+
+    fn tx_data_mask(&self) -> u32 {
+        let data_bits: u32 = if (self.cr1 & USART_CR1_M) != 0 { 9 } else { 8 };
+        // With parity enabled, the top data bit is replaced by parity.
+        let payload_bits = if (self.cr1 & USART_CR1_PCE) != 0 {
+            data_bits.saturating_sub(1)
+        } else {
+            data_bits
+        };
+        if payload_bits >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << payload_bits) - 1
         }
     }
 }
@@ -168,7 +201,7 @@ impl Peripheral for Usart {
             }
             0x0004 => {
                 // DR register write: indicates TX data write
-                self.dr = value & 0xFF;
+                self.dr = value & self.tx_data_mask();
 
                 // Only transmit if USART enabled (UE) and transmitter enabled (TE)
                 let tx_enabled = (self.cr1 & USART_CR1_UE) != 0 && (self.cr1 & USART_CR1_TE) != 0;
@@ -181,16 +214,35 @@ impl Peripheral for Usart {
                 // If DMA TX is not enabled, write directly to ext_device
                 if tx_enabled && (self.cr3 & USART_CR3_DMAT) == 0 {
                     self.ext_device.as_ref().map(|d|
-                        d.borrow_mut().write(sys, (), value as u8)
+                        d.borrow_mut().write(sys, (), self.dr as u8)
                     );
                 }
 
-                trace!("{} write={:02x}", self.name, value as u8);
+                trace!("{} write={:02x}", self.name, self.dr as u8);
             }
             0x0008 => self.brr = value,
-            0x000c => self.cr1 = value,
-            0x0010 => self.cr2 = value,
-            0x0014 => self.cr3 = value,
+            0x000c => {
+                self.cr1 = value;
+                if self.irq >= 0 && (self.cr1 & USART_CR1_UE) != 0 {
+                    let txe = (self.sr & USART_SR_TXE) != 0;
+                    let tc = (self.sr & USART_SR_TC) != 0;
+                    let rxne = (self.sr & USART_SR_RXNE) != 0;
+                    let txeie = (self.cr1 & USART_CR1_TXEIE) != 0;
+                    let tcie = (self.cr1 & USART_CR1_TCIE) != 0;
+                    let rxneie = (self.cr1 & USART_CR1_RXNEIE) != 0;
+                    if (txe && txeie) || (tc && tcie) || (rxne && rxneie) {
+                        sys.p.nvic.borrow_mut().set_intr_pending(self.irq);
+                    }
+                }
+            }
+            0x0010 => {
+                // Persist full CR2 state, but keep only defined stop-bit field in behavior.
+                self.cr2 = value;
+            }
+            0x0014 => {
+                // Persist CR3 state; DMAT/DMAR are consumed in DMA hooks.
+                self.cr3 = value;
+            }
             0x0018 => self.gtpr = value,
             _ => {}
         }

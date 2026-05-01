@@ -132,24 +132,40 @@ impl Tim {
                 debug!("{} CC1 compare fired cnt=0x{:08x} ccr1=0x{:08x} -> IRQ {}", self.name, self.cnt, self.ccr1, irq);
                 sys.p.nvic.borrow_mut().set_intr_pending(irq);
             }
+            // CC1 DMA request (DIER bit 9)
+            if (self.dier & (1 << 9)) != 0 {
+                self.trigger_cc_dma_request(sys, 1);
+            }
         }
         // CCR2 – DIER bit 2, SR bit 2
         if (self.dier & (1 << 2)) != 0 && (self.sr & (1 << 2)) == 0 && check_cc(old_cnt, self.cnt, self.ccr2) {
             self.sr |= 1 << 2;
             let irq = self.cc_irq_number().or_else(|| self.irq_number());
             if let Some(irq) = irq { sys.p.nvic.borrow_mut().set_intr_pending(irq); }
+            // CC2 DMA request (DIER bit 10)
+            if (self.dier & (1 << 10)) != 0 {
+                self.trigger_cc_dma_request(sys, 2);
+            }
         }
         // CCR3 – DIER bit 3, SR bit 3
         if (self.dier & (1 << 3)) != 0 && (self.sr & (1 << 3)) == 0 && check_cc(old_cnt, self.cnt, self.ccr3) {
             self.sr |= 1 << 3;
             let irq = self.cc_irq_number().or_else(|| self.irq_number());
             if let Some(irq) = irq { sys.p.nvic.borrow_mut().set_intr_pending(irq); }
+            // CC3 DMA request (DIER bit 11)
+            if (self.dier & (1 << 11)) != 0 {
+                self.trigger_cc_dma_request(sys, 3);
+            }
         }
         // CCR4 – DIER bit 4, SR bit 4
         if (self.dier & (1 << 4)) != 0 && (self.sr & (1 << 4)) == 0 && check_cc(old_cnt, self.cnt, self.ccr4) {
             self.sr |= 1 << 4;
             let irq = self.cc_irq_number().or_else(|| self.irq_number());
             if let Some(irq) = irq { sys.p.nvic.borrow_mut().set_intr_pending(irq); }
+            // CC4 DMA request (DIER bit 12)
+            if (self.dier & (1 << 12)) != 0 {
+                self.trigger_cc_dma_request(sys, 4);
+            }
         }
 
         if self.cnt >= self.arr {
@@ -160,7 +176,24 @@ impl Tim {
                     sys.p.nvic.borrow_mut().set_intr_pending(irq);
                 }
             }
+            // Update DMA request (DIER bit 8)
+            if (self.dier & (1 << 8)) != 0 {
+                self.trigger_update_dma_request(sys);
+            }
         }
+    }
+
+    fn trigger_cc_dma_request(&self, sys: &System, cc: u8) {
+        // Determine which address and channel to trigger DMA for
+        // This is simplified: actual firmware would have configured a specific stream
+        // For now, we log that a CC DMA request occurred
+        debug!("{} CC{} DMA request triggered (DIER bit {} set)", self.name, cc, 8 + cc);
+        // TODO: enumerate active DMA streams for this timer and fire any that are waiting
+    }
+
+    fn trigger_update_dma_request(&self, sys: &System) {
+        debug!("{} Update DMA request triggered (DIER bit 8 set)", self.name);
+        // TODO: enumerate active DMA streams for this timer update events
     }
 }
 

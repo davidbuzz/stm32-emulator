@@ -78,20 +78,20 @@ impl Nvic {
     pub fn set_intr_pending(&mut self, irq: i32) {
         trace!("Set irq pending irq={}", irq);
         let bit = IRQ_OFFSET + irq;
-        assert!(bit > 0);
-        self.pending |= 1 << (IRQ_OFFSET + irq);
+        assert!(bit >= 0 && bit < 128);
+        self.pending |= 1u128 << bit;
     }
 
     pub fn clear_intr_pending(&mut self, irq: i32) {
         let bit = IRQ_OFFSET + irq;
-        assert!(bit > 0);
-        self.pending &= !(1 << (IRQ_OFFSET + irq));
+        assert!(bit >= 0 && bit < 128);
+        self.pending &= !(1u128 << bit);
     }
 
     pub fn is_intr_pending(&self, irq: i32) -> bool {
         let bit = IRQ_OFFSET + irq;
-        assert!(bit > 0);
-        (self.pending & (1 << (IRQ_OFFSET + irq))) != 0
+        assert!(bit >= 0 && bit < 128);
+        (self.pending & (1u128 << bit)) != 0
     }
 
     pub fn next_pending_intr(&self) -> Option<i32> {
@@ -130,8 +130,9 @@ impl Nvic {
         let irq50_pending = self.is_intr_pending(50);
         let irq67_pending = self.is_intr_pending(67);
 
-        for irq in 0..128 {
-            let pending_bit = 1u128 << (IRQ_OFFSET + irq);
+        let max_external_irqs = 128 - (IRQ_OFFSET as usize);
+        for irq in 0..max_external_irqs {
+            let pending_bit = 1u128 << ((IRQ_OFFSET as usize) + irq);
             if self.pending & pending_bit == 0 {
                 continue;
             }
@@ -180,7 +181,7 @@ impl Nvic {
 
     pub fn get_and_clear_next_intr_pending(&mut self) -> Option<i32> {
         if let Some(bit) = self.next_dispatchable_bit() {
-            self.pending &= !(1 << bit);
+            self.pending &= !(1u128 << bit);
             let irq = (bit as i32) - IRQ_OFFSET;
             Some(irq)
         } else {

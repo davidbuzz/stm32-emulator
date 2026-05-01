@@ -5,7 +5,7 @@
 | DMA Implement broader request conflict handling and arbitration for shared requests. | high | partially implemented | Arbitration now resolves channel-wide stream conflicts (not only identical PAR), preserves read/write full-duplex sharing, and applies mode-error signaling when blocked. |
 | DMA Implement full stream priority arbitration semantics. | high | partially implemented | New stream compares PL against all conflicting owners and preempts lower-priority owners; equal-or-higher owner priority blocks with TE/DME/FE path. RM-complete fairness and dynamic re-arbitration remain. |
 | DMA Implement STM32F4-accurate EN disable and re-enable sequencing timing. | high | done | Enforce 8-instruction delay between EN=0 and EN=1. disable_requested_at field tracks pending disables; service_disable_delay() gates re-enable. CR read/write paths call service_disable_delay(). Validated at 120M instructions. |
-| USART Implement CR1 CR2 CR3 behavior beyond stubs. | high | partially implemented | UE TE RE gating implemented: DR writes only reach ext_device when UE+TE set; full stop-bits parity and CR2/CR3 depth still missing. |
+| USART Implement CR1 CR2 CR3 behavior beyond stubs. | high | partially implemented | UE TE RE gating plus CR2 STOP and CR1 parity/word-length aware TX frame timing are modeled; CR3 still persists for DMA and interrupt gating. Hardware-accurate RX framing and full CR3 side effects remain. |
 | USART Implement realistic SR transitions. | high | done | TX state machine: TXE/TC cleared on DR write, both set after 10-instruction delay. SR write only clears TC/RXNE. Initial SR: TXE+TC+IDLE set. |
 | USART Implement UART USART interrupt generation and clearing rules. | high | done | TXEIE and TCIE trigger NVIC pending via IRQ looked up from DeviceMeta with STM32F427 fallback table. |
 | SPI Implement stateful SPI status flags instead of synthetic toggles. | high | done | rxne bool state: clears on DR read, sets on DR write. TXE always=1. CR2 now readable. OVR MODF BSY still static. |
@@ -14,20 +14,20 @@
 | RCC Implement effective bus and clock configuration impacts on peripheral timing. | medium | open | Affects UART baud-rate accuracy and TIM prescaler alignment. Not a gate for CubeBlack boot; reduces timing accuracy. |
 | USB OTG FS remains partial for full CDC-accurate endpoint FIFO and interrupt behavior. | medium | partially implemented | Full synthetic enumeration: USBRST ENUMDNE SOF EP0 SETUP ZLP SET_ADDRESS SET_CONFIG CDC ACM handshake. EP1 bulk IN TXFE path captures console output. FIFO threshold semantics and non-enumeration OUT transfer handling remain. |
 | USART Implement baud-rate effects from BRR for timing assumptions. | medium | partially implemented | BRR now influences TXE/TC completion latency via bounded delay derived from mantissa/fraction. RX sampling/parity framing timing remains simplified. |
-| SPI Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | open | Needed by CubeBlack peripheral behavior. |
-| SPI Implement SPI error and interrupt signaling paths. | medium | open | Needs RXNE TXE and ERR interrupt behavior. |
+| SPI Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | partially implemented | CPHA now changes transfer ordering and master+HW-NSS mode-fault path clears SPE with MODF set; deeper CPOL timing and full NSS pin routing remain simplified. |
+| SPI Implement SPI error and interrupt signaling paths. | medium | partially implemented | RXNEIE TXEIE ERRIE now raise NVIC pending; OVR and MODF flags modeled with simplified clear behavior. |
 | TIM Extend timer coverage beyond current subset based on runtime use. | medium | open | Prioritize runtime-used instances and channels first. |
 | TIM Timer DMA request generation paths. | medium | open | Needed where firmware expects DMA-triggered operation. |
 | TIM Counting modes preload and slave synchronization behavior. | medium | open | Down center-aligned ARPE and sync behavior still missing. |
 | NVIC Implement deeper fault-path semantics and escalation behavior. | medium | open | Current implementation is mostly register storage. |
 | NVIC Extend CoreDebug DWT coverage beyond minimal counters and controls. | medium | open | Expand only where firmware consumption proves needed. |
-| NVIC Improve NVIC priority and enable arbitration with multiple active sources. | medium | open | Needed for realistic exception competition behavior. |
+| NVIC Improve NVIC priority and enable arbitration with multiple active sources. | medium | partially implemented | External arbitration now bounds pending-bit iteration to representable IRQ range and uses safe u128 pending-bit shifts; priority competition remains simplified versus full ARM nesting semantics. |
 | Broader AZhurGIT meta adoption not complete. | medium | open | Benefits maintainability but is not immediate top runtime blocker. |
 | meta adoption remains partial beyond IRQ lookup in I2C and TIM. | medium | open | Broader register-offset migration pending. |
 | Ethernet MAC peripheral coverage is still missing versus reference baseline. | medium | open | Coverage gap remains. |
-| FLASH sector and mass erase not yet tracked previously. | low | open | Missing SER MER SNB STRT behavior can block firmware erase flows. |
-| FLASH lock unlock key sequence not fully modeled. | low | open | Locked hardware should ignore writes until correct key sequence. |
-| FLASH status flags BSY EOP and error bits not fully modeled. | low | open | Firmware polling BSY may stall without accurate status behavior. |
+| FLASH sector and mass erase not yet tracked previously. | low | partially implemented | SER and MER plus STRT now launch deferred operations; SNB is decoded and invalid sector numbers flag OPERR. Full backing-flash data mutation is still simplified. |
+| FLASH lock unlock key sequence not fully modeled. | low | done | KEYR two-step unlock with re-lock on bad sequence is modeled, and CR writes are ignored while LOCK is set. |
+| FLASH status flags BSY EOP and error bits not fully modeled. | low | partially implemented | BSY and EOP transition through deferred completion; OPERR is raised on invalid STRT and locked CR writes. Wider error-bit classes remain minimal. |
 | FMC FSMC 4-bank abstraction with external routing is missing. | low | open | Current fsmc model is stub compared to fork reference implementation. |
 | LTDC video support remains unimplemented. | low | open | Not currently required for CubeBlack runtime milestones. |
 | TIM Advanced counting modes up down and center-aligned. | low | open | Current behavior is monotonic software timebase without direction or center-aligned rules. |
@@ -49,7 +49,7 @@
 | ADC peripheral stub for ADC1 ADC2 ADC3. | medium | partially implemented | EOC always set and DR synthetic half-scale output; DMA read emits correct halfword bytes. |
 | I2C transaction sequencing baseline with board-level hooks. | medium | partially implemented | EV5 EV6 EV8_2 style sequencing plus address-scoped slave hooks and unknown-address NACK; full RM fault and timing fidelity still pending. |
 | Timer CCMR1 CCMR2 CCER register storage. | medium | partially implemented | Registers persist and read back, but output-compare mode decode and GPIO toggling remain unimplemented. |
-| EXTI peripheral model added and wired. | medium | partially implemented | Core EXTI registers and IRQ fanout modeled; lines 16 through 22 remain unmodeled. |
+| EXTI peripheral model added and wired. | medium | partially implemented | Core EXTI registers and IRQ fanout modeled, including lines 16 through 22 wake/tamper/RTC routing; SYSCFG line-port mux fidelity and event-only behavior remain simplified. |
 | TIM peripheral extended to TIM1 through TIM14 with EGR and CCR2-4. | medium | partially implemented | Update and compare events expanded, with remaining OC mode decoding gaps. |
 | TIM TIM1 TIM8 advanced control register coverage for CR2 SMCR EGR CCER BDTR RCR. | low | partially implemented | CR2 SMCR EGR present; CCER BDTR RCR and complementary-output control remain missing. |
 | TIM Channel state for CCR2 CCR3 CCR4 CCMR1 and CCMR2. | low | partially implemented | CCR2 through CCR4 storage and compare firing are present; CCMR decode and CCER polarity enable remain incomplete. |
