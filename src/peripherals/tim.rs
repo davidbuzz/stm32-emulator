@@ -49,6 +49,10 @@ pub struct Tim {
     break_condition: bool,
     update_irq: Option<i32>,
     cc_irq: Option<i32>,
+    /// SMCR slave mode configuration: SMS bits 2:0 extracted
+    smcr_sms: u8,
+    /// SMCR trigger selection: TS bits 6:4 extracted  
+    smcr_ts: u8,
     last_clk: u64,
     psc_accum: u64,
 }
@@ -347,7 +351,14 @@ impl Peripheral for Tim {
                 self.direction_up = (value >> 4) & 1 == 0;  // CR1 bit 4: DIR (0=up, 1=down)
             }
             0x0004 => self.cr2 = value,
-            0x0008 => self.smcr = value,
+            0x0008 => {
+                self.smcr = value;
+                self.smcr_sms = (value & 0x7) as u8;  // SMS bits 2:0
+                self.smcr_ts = ((value >> 4) & 0x7) as u8;  // TS bits 6:4
+                if self.smcr_sms != 0 {
+                    debug!("{} write SMCR=0x{:08x} (SMS={} TS={})", self.name, value, self.smcr_sms, self.smcr_ts);
+                }
+            }
             0x000c => {
                 debug!("{} write DIER=0x{:08x}", self.name, value);
                 self.dier = value;
