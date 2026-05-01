@@ -11,6 +11,7 @@
 
 use crate::system::System;
 use super::Peripheral;
+use super::exti;
 
 use regex::Regex;
 
@@ -89,6 +90,7 @@ pub struct Gpio {
     lck: u32,
     afrl: u32,
     afrh: u32,
+    od_prev: u32,  // Track previous ODR state for pin transition detection
 }
 
 impl Gpio {
@@ -207,7 +209,17 @@ impl Peripheral for Gpio {
                     gpio.write_port(sys, self.port, pin, v != 0);
                     trace!("{} output={}", self.port_str(pin), v);
                 });
+                // Detect pin transitions for EXTI triggering
+                let changes = self.od ^ value;
+                for pin in 0..16 {
+                    if (changes & (1 << pin)) != 0 {
+                        let prev = ((self.od >> pin) & 1) != 0;
+                        let curr = ((value >> pin) & 1) != 0;
+                        exti::gpio_pin_transition(sys, self.port, pin as u8, prev, curr);
+                    }
+                }
                 self.od = value;
+                self.od_prev = value;
             }
             0x0018 => {
                 let reset = value >> 16;
@@ -224,8 +236,19 @@ impl Peripheral for Gpio {
                     trace!("{} output=0", self.port_str(pin));
                 });
 
-                self.od &= !reset;
-                self.od |= set;
+                let new_od = (self.od & !reset) | set;
+                // Detect pin transitions for EXTI triggering
+                let changes = self.od ^ new_od;
+                for pin in 0..16 {
+                    if (changes & (1 << pin)) != 0 {
+                        let prev = ((self.od >> pin) & 1) != 0;
+                        let curr = ((new_od >> pin) & 1) != 0;
+                        exti::gpio_pin_transition(sys, self.port, pin as u8, prev, curr);
+                    }
+                }
+
+                self.od = new_od;
+                self.od_prev = new_od;
             }
             0x001C => {
                 trace!("GPIO{} port locked", self.port_letter);
