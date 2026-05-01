@@ -718,14 +718,11 @@ impl Peripheral for OtgFs {
 
         // On real hardware RXFLVL stays asserted while the RxFIFO is non-empty.
         // The ChibiOS ISR clears all GINTSTS bits (including RXFLVL) at ISR entry.
-        // We must reset irq_latched BEFORE re-asserting RXFLVL here, otherwise the
-        // step() that runs immediately after firmware's GINTSTS-clear sees masked_interrupts()
-        // non-zero (from the re-asserted RXFLVL) and never resets irq_latched, so the
-        // second RXFLVL IRQ that handles PKTSTS=4 never fires.
-        if shared.gahbcfg & GAHBCFG_GINT == 0 || shared.masked_interrupts() == 0 {
-            shared.irq_latched = false;
-        }
-
+        // We re-assert RXFLVL for states that still have data pending, then reset
+        // irq_latched to allow the next IRQ 67 delivery. The latch is also reset
+        // whenever RxFlvlCompletePending is active — this is a new epoch (firmware
+        // finished reading the FIFO data and we need another IRQ to deliver the
+        // PKTSTS_SETUP_COMPL status read from GRXSTSP).
         if matches!(
             shared.ep0_rx_state,
             Ep0RxState::RxFlvlFifoPending
@@ -734,6 +731,17 @@ impl Peripheral for OtgFs {
                 | Ep0RxState::OutCompletePending
         ) {
             shared.gintsts |= GINTSTS_RXFLVL;
+        }
+
+        // Reset irq_latched when RXFLVL has been freshly re-asserted for a new epoch,
+        // or when there are genuinely no pending interrupts. Without this, the second
+        // RXFLVL IRQ (PKTSTS_SETUP_COMPL) never fires because masked_interrupts() is
+        // non-zero from the re-asserted RXFLVL and irq_latched is never cleared.
+        if shared.gahbcfg & GAHBCFG_GINT == 0
+            || shared.masked_interrupts() == 0
+            || matches!(shared.ep0_rx_state, Ep0RxState::RxFlvlCompletePending | Ep0RxState::OutCompletePending)
+        {
+            shared.irq_latched = false;
         }
 
         if shared.ep0_rx_state == Ep0RxState::StupPending && ep0_armed {
