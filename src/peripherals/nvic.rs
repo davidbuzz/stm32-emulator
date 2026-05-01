@@ -28,6 +28,29 @@ pub struct Nvic {
     active_exceptions: u32,
     exc_return_stack: Vec<u32>,
     exc_stack_state: Vec<(u64, i32)>,
+    
+    /// SHPR (System Handler Priority Register) for system exceptions
+    /// SHPR1 (0xE000ED18): UsageFault, BusFault, MemManage priorities [23:0]
+    /// SHPR2 (0xE000ED1C): SVCall priority [31:24]
+    /// SHPR3 (0xE000ED20): SysTick [31:24], PendSV [23:16]
+    shpr: [u32; 3],
+    
+    /// ICSR (Interrupt Control and State Register) bits for fault escalation
+    /// Bit 25: VECTACTIVE - currently active ISR number
+    /// Bit 24: RETTOBASE - all exceptions to thread mode (no nested active)
+    /// Bit 23-16: PVENDSVSET - PendSV pending
+    /// Bit 15-10: PENDING (for reserved/fault groups)
+    icsr_state: u32,
+    
+    /// Fault status registers
+    /// Hard fault pending flag
+    hardfault_pending: bool,
+    /// Memory management fault active
+    mmfault_active: bool,
+    /// Bus fault active
+    busfault_active: bool,
+    /// Usage fault active
+    usagefault_active: bool,
 }
 
 impl Default for Nvic {
@@ -42,6 +65,12 @@ impl Default for Nvic {
             active_exceptions: 0,
             exc_return_stack: Vec::new(),
             exc_stack_state: Vec::new(),
+            shpr: [0; 3],
+            icsr_state: 0,
+            hardfault_pending: false,
+            mmfault_active: false,
+            busfault_active: false,
+            usagefault_active: false,
         }
     }
 }
@@ -259,6 +288,52 @@ impl Nvic {
         }
 
         None
+    }
+
+    /// Check if a UsageFault should be escalated to HardFault based on SHPR priority levels.
+    fn should_escalate_to_hardfault(&self, fault_type: &str) -> bool {
+        // If no specific fault handler is configured (priority 0), escalate to HardFault
+        // SHPR1[23:16] = UsageFault priority, [15:8] = BusFault, [7:0] = MemManage
+        let usage_fault_prio = (self.shpr[0] >> 16) & 0xFF;
+        let bus_fault_prio = (self.shpr[0] >> 8) & 0xFF;
+        let mm_fault_prio = self.shpr[0] & 0xFF;
+        
+        match fault_type {
+            "UsageFault" => usage_fault_prio == 0,
+            "BusFault" => bus_fault_prio == 0,
+            "MemManage" => mm_fault_prio == 0,
+            _ => true,
+        }
+    }
+
+    /// Signal a fault and determine if it should escalate to HardFault
+    pub fn signal_fault(&mut self, fault_type: &str) {
+        debug!("NVIC: {} signaled (escalate_to_hardfault={})", fault_type, self.should_escalate_to_hardfault(fault_type));
+        
+        if self.should_escalate_to_hardfault(fault_type) {
+            self.hardfault_pending = true;
+            // HardFault is non-maskable and takes highest priority (vector 3)
+            self.set_intr_pending(-3); // HardFault IRQ number
+        } else {
+            match fault_type {
+                "MemManage" => {
+                    self.mmfault_active = true;
+                    // MemManage is IRQ -12
+                    self.set_intr_pending(-12);
+                }
+                "BusFault" => {
+                    self.busfault_active = true;
+                    // BusFault is IRQ -11
+                    self.set_intr_pending(-11);
+                }
+                "UsageFault" => {
+                    self.usagefault_active = true;
+                    // UsageFault is IRQ -10
+                    self.set_intr_pending(-10);
+                }
+                _ => {}
+            }
+        }
     }
 
     fn read_vector_addr(sys: &System, vector_table_addr: u32, irq: i32) -> u32 {
