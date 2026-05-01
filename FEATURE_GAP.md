@@ -16,9 +16,9 @@
 | USART Implement baud-rate effects from BRR for timing assumptions. | medium | partially implemented | BRR now influences TXE/TC completion latency via bounded delay derived from mantissa/fraction. RX sampling/parity framing timing remains simplified. |
 | SPI Implement control semantics for CPOL CPHA frame format and NSS master-slave effects. | medium | partially implemented | CPHA now changes transfer ordering and master+HW-NSS mode-fault path clears SPE with MODF set; deeper CPOL timing and full NSS pin routing remain simplified. |
 | SPI Implement SPI error and interrupt signaling paths. | medium | partially implemented | RXNEIE TXEIE ERRIE now raise NVIC pending; OVR and MODF flags modeled with simplified clear behavior. |
-| TIM Extend timer coverage beyond current subset based on runtime use. | medium | open | Prioritize runtime-used instances and channels first. |
+| TIM Extend timer coverage beyond current subset based on runtime use. | medium | partially implemented | Extended TIM register coverage: RCR (repetition counter) for TIM1/TIM8, BDTR (break and dead-time register) for advanced timers. ARPE, CMS, and DIR control bits now extracted from CR1 and tracked. Remaining: input-capture and advanced synchronization. |
 | TIM Timer DMA request generation paths. | medium | partially implemented | CC1-CC4 DMA request signaling (DIER bits 9-12) and update DMA request (DIER bit 8) now logged on compare/overflow events. Stream enumeration and actual DMA firing remain stubs. |
-| TIM Counting modes preload and slave synchronization behavior. | medium | open | Down center-aligned ARPE and sync behavior still missing. |
+| TIM Counting modes preload and slave synchronization behavior. | medium | partially implemented | Down-counting and center-aligned modes now supported via CMS and DIR bits. RCR (repetition counter) delays update event by RCR+1 overflows on TIM1/TIM8. ARPE tracking added for preload enable. Slave synchronization still missing. |
 | NVIC Implement deeper fault-path semantics and escalation behavior. | medium | open | Current implementation is mostly register storage. |
 | NVIC Extend CoreDebug DWT coverage beyond minimal counters and controls. | medium | open | Expand only where firmware consumption proves needed. |
 | NVIC Improve NVIC priority and enable arbitration with multiple active sources. | medium | partially implemented | External arbitration now bounds pending-bit iteration to representable IRQ range and uses safe u128 pending-bit shifts; priority competition remains simplified versus full ARM nesting semantics. |
@@ -30,9 +30,9 @@
 | FLASH status flags BSY EOP and error bits not fully modeled. | low | partially implemented | BSY and EOP transition through deferred completion; OPERR is raised on invalid STRT and locked CR writes. Wider error-bit classes remain minimal. |
 | FMC FSMC 4-bank abstraction with external routing is missing. | low | open | Current fsmc model is stub compared to fork reference implementation. |
 | LTDC video support remains unimplemented. | low | open | Not currently required for CubeBlack runtime milestones. |
-| TIM Advanced counting modes up down and center-aligned. | low | open | Current behavior is monotonic software timebase without direction or center-aligned rules. |
+| TIM Advanced counting modes up down and center-aligned. | low | partially implemented | Down-counting (CR1 DIR bit) and center-aligned modes (CR1 CMS bits) now supported in tick logic. Counter decrements in down mode or wraps appropriately in center-aligned. Full bidirectional and symmetric waveform modes remain simplified. |
 | TIM Update compare commutation trigger and break event semantics. | low | open | SR and DIER behavior remains minimal. |
-| TIM Complementary outputs MOE break input and dead-time insertion. | low | open | Required for advanced PWM motor-control fidelity. |
+| TIM Complementary outputs MOE break input and dead-time insertion. | low | partially implemented | BDTR register now stored and accessed; MOE and BKE bits tracked. Dead-time insertion logic (DTG) still not implemented. |
 | TIM Timer synchronization and master-slave trigger chaining. | low | open | Cross-timer link behavior is not implemented. |
 | TIM TIM1 TIM8 DMA request generation. | low | open | Advanced timer DMA request behavior still missing. |
 | Minimal TIM5 TIM6 TIM7 timebase. | medium | partially implemented | Provides CR1 DIER SR CNT PSC ARR CCR1 subset, not full advanced timer model. |

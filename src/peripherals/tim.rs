@@ -34,6 +34,17 @@ pub struct Tim {
     ccr2: u32,
     ccr3: u32,
     ccr4: u32,
+    /// ARPE (CR1 bit 7): auto-reload preload enable. When set, ARR value preloads on next update event.
+    arpe: bool,
+    /// CR1[5:4]: CMS counting mode. 00=upcounting, 01/10=center-aligned, 11=reserved.
+    cms: u8,
+    /// CR1 bit 4: DIR direction (0=up, 1=down). Only meaningful when CMS=00 (edge-aligned).
+    direction_up: bool,
+    /// RCR (repetition counter) for advanced timers TIM1/TIM8: update fires only after RCR+1 overflows.
+    rcr: u32,
+    rcr_count: u32,
+    /// BDTR (break and dead-time register) for advanced timers: MOE, BKE, OSSR, OSSI, DTG.
+    bdtr: u32,
     update_irq: Option<i32>,
     cc_irq: Option<i32>,
     last_clk: u64,
@@ -117,11 +128,34 @@ impl Tim {
         }
 
         let old_cnt = self.cnt;
-        self.cnt = self.cnt.wrapping_add(ticks);
+        
+        // Determine counting direction based on DIR bit (CR1[4]) and CMS mode (CR1[6:5])
+        // For edge-aligned mode (CMS=00): up if DIR=0, down if DIR=1
+        // For center-aligned modes: counter alternates direction
+        let is_downcounting = self.cms == 0 && !self.direction_up;
+        
+        if is_downcounting {
+            // Down-counting mode: decrement counter
+            self.cnt = self.cnt.saturating_sub(ticks);
+        } else if self.cms == 0 {
+            // Edge-aligned up-counting mode (default)
+            self.cnt = self.cnt.wrapping_add(ticks);
+        } else if self.cms == 1 || self.cms == 2 {
+            // Center-aligned mode: counter increments then decrements (simplified single direction per tick)
+            // For now, just count up; real hardware maintains DIR flag state
+            self.cnt = self.cnt.wrapping_add(ticks);
+        } else {
+            // CMS=3 is reserved
+            return;
+        }
 
         // Fire compare once when the counter crosses CCR1-CCR4; flags remain set until cleared.
         let check_cc = |old: u32, new: u32, ccr: u32| -> bool {
-            if old <= new { old < ccr && ccr <= new } else { old < ccr || ccr <= new }
+            if is_downcounting {
+                if old >= new { old > ccr && ccr >= new } else { old > ccr || ccr >= new }
+            } else {
+                if old <= new { old < ccr && ccr <= new } else { old < ccr || ccr <= new }
+            }
         };
 
         // CCR1 – DIER bit 1, SR bit 1
@@ -168,17 +202,60 @@ impl Tim {
             }
         }
 
-        if self.cnt >= self.arr {
-            self.sr |= 1;
-            self.cnt = 0;
-            if (self.dier & 1) != 0 {
-                if let Some(irq) = self.irq_number() {
-                    sys.p.nvic.borrow_mut().set_intr_pending(irq);
+        // Check for overflow/underflow condition
+        let overflow = if is_downcounting {
+            old_cnt > 0 && self.cnt == 0  // Counter underflowed to 0
+        } else {
+            self.cnt >= self.arr  // Counter overflowed past ARR
+        };
+
+        if overflow {
+            // RCR (Repetition Counter) for advanced timers: delay update until RCR+1 overflows
+            if self.name == "TIM1" || self.name == "TIM8" {
+                self.rcr_count = self.rcr_count.saturating_add(1);
+                if self.rcr_count >= self.rcr {
+                    self.rcr_count = 0;
+                    // Fire update event on this overflow
+                    self.sr |= 1;
+                    if is_downcounting {
+                        self.cnt = self.arr;
+                    } else {
+                        self.cnt = 0;
+                    }
+                    if (self.dier & 1) != 0 {
+                        if let Some(irq) = self.irq_number() {
+                            sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                        }
+                    }
+                    // Update DMA request (DIER bit 8)
+                    if (self.dier & (1 << 8)) != 0 {
+                        self.trigger_update_dma_request(sys);
+                    }
+                } else {
+                    // Not time for update event yet; just reload counter without firing interrupt
+                    if is_downcounting {
+                        self.cnt = self.arr;
+                    } else {
+                        self.cnt = 0;
+                    }
                 }
-            }
-            // Update DMA request (DIER bit 8)
-            if (self.dier & (1 << 8)) != 0 {
-                self.trigger_update_dma_request(sys);
+            } else {
+                // General-purpose timers: immediate update (no RCR)
+                self.sr |= 1;
+                if is_downcounting {
+                    self.cnt = self.arr;
+                } else {
+                    self.cnt = 0;
+                }
+                if (self.dier & 1) != 0 {
+                    if let Some(irq) = self.irq_number() {
+                        sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                    }
+                }
+                // Update DMA request (DIER bit 8)
+                if (self.dier & (1 << 8)) != 0 {
+                    self.trigger_update_dma_request(sys);
+                }
             }
         }
     }
@@ -218,10 +295,27 @@ impl Peripheral for Tim {
             0x0024 => self.cnt,
             0x0028 => self.psc,
             0x002c => self.arr,
+            0x0030 => {
+                // RCR (1xH): Repetition Counter for TIM1 TIM8 only
+                // Firmware reads to check remaining repetitions before update
+                if self.name == "TIM1" || self.name == "TIM8" {
+                    self.rcr as u32
+                } else {
+                    0
+                }
+            }
             0x0034 => self.ccr1,
             0x0038 => self.ccr2,
             0x003c => self.ccr3,
             0x0040 => self.ccr4,
+            0x0044 => {
+                // BDTR (44H): Break and Dead-Time Register for TIM1 TIM8
+                if self.name == "TIM1" || self.name == "TIM8" {
+                    self.bdtr
+                } else {
+                    0
+                }
+            }
             _ => 0,
         }
     }
@@ -233,6 +327,10 @@ impl Peripheral for Tim {
             0x0000 => {
                 debug!("{} write CR1=0x{:08x}", self.name, value);
                 self.cr1 = value;
+                // Extract control bits from CR1
+                self.arpe = (value >> 7) & 1 != 0;  // CR1 bit 7: ARPE
+                self.cms = ((value >> 5) & 0x3) as u8;  // CR1[6:5]: CMS
+                self.direction_up = (value >> 4) & 1 == 0;  // CR1 bit 4: DIR (0=up, 1=down)
             }
             0x0004 => self.cr2 = value,
             0x0008 => self.smcr = value,
@@ -281,13 +379,39 @@ impl Peripheral for Tim {
                 debug!("{} write ARR=0x{:08x}", self.name, value);
                 self.arr = value;
             }
+            0x0030 => {
+                // RCR (1xH): Repetition Counter for TIM1 TIM8
+                if self.name == "TIM1" || self.name == "TIM8" {
+                    self.rcr = value as u32;
+                    self.rcr_count = 0;
+                    debug!("{} write RCR=0x{:08x}", self.name, value);
+                }
+            }
             0x0034 => {
-                debug!("{} write CCR1=0x{:08x} (cnt=0x{:08x})", self.name, value, self.cnt);
+                debug!("{} write CCR1=0x{:08x}", self.name, value);
                 self.ccr1 = value;
             }
-            0x0038 => self.ccr2 = value,
-            0x003c => self.ccr3 = value,
-            0x0040 => self.ccr4 = value,
+            0x0038 => {
+                debug!("{} write CCR2=0x{:08x}", self.name, value);
+                self.ccr2 = value;
+            }
+            0x003c => {
+                debug!("{} write CCR3=0x{:08x}", self.name, value);
+                self.ccr3 = value;
+            }
+            0x0040 => {
+                debug!("{} write CCR4=0x{:08x}", self.name, value);
+                self.ccr4 = value;
+            }
+            0x0044 => {
+                // BDTR (44H): Break and Dead-Time Register for TIM1 TIM8
+                if self.name == "TIM1" || self.name == "TIM8" {
+                    self.bdtr = value;
+                    debug!("{} write BDTR=0x{:08x} (MOE={} BKE={})", 
+                        self.name, value, 
+                        (value >> 15) & 1, (value >> 12) & 1);
+                }
+            }
             _ => {}
         }
     }
