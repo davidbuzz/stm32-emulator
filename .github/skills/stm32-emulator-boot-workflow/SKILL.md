@@ -63,10 +63,11 @@ cd cubeblack
 - Prefer `timeout` for probes that may not terminate promptly.
 - Measured on the current workspace state:
   - `--max-instructions 3000000`: about `1.3s`
+  - `main`: about `1.6s`
   - `--max-instructions 120000000`: about `47s`
   - `--busy-loop-stop`: timed out at `30s` / about `70.9M` instructions in one probe
 - Working defaults:
-  - short feedback runs: `timeout 30`
+  - short feedback runs: `timeout 10`
   - longer bounded runs up to `120000000` instructions: `timeout 120`
   - `--busy-loop-stop`: `timeout 30` unless you are deliberately letting it run longer
 
@@ -76,7 +77,7 @@ Example wrappers:
 cd cubeblack
 
 /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
-  timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+  timeout 10 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
 
 /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
   timeout 120 ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000

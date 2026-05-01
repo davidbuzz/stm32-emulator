@@ -58,10 +58,12 @@ tail -40 ardu.cubeblack.log
 - For exact wall-clock bounded validation runs that also capture logs, prefer a background PID plus explicit `sleep`/`kill -9` over `timeout` in a pipeline.
 - Measured on the current workspace state:
   - `--max-instructions 3000000` takes about `1.3s`
+  - `main` is reached in about `1.6s`
   - `--max-instructions 120000000` takes about `47s`
   - `--busy-loop-stop` did not terminate quickly in one probe and was cut off at `30s` / about `70.9M` instructions
 - Recommended defaults:
-  - `timeout 30` for short runs and busy-loop probes
+  - `timeout 10` for short runs
+  - `timeout 30` for busy-loop probes
   - explicit 120-second PID kill for longer bounded runs up to `120000000` instructions
 
 ```bash
@@ -69,7 +71,7 @@ cd cubeblack
 
 # Short feedback run
 /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
-  timeout 30 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+  timeout 10 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
 
 # Longer stability run
 ( /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
