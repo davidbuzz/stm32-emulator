@@ -475,9 +475,8 @@ impl Stream {
                 self.fifo_bytes + incoming_bytes > threshold
             }
             Dir::Write => {
-                // M2P: check if FIFO has enough data for outgoing transfer
-                // Underrun occurs if we need to send but FIFO not full enough
-                self.fifo_bytes < incoming_bytes
+                // M2P: data is sourced from memory in this model; do not gate on fifo_bytes.
+                false
             }
             _ => false,
         }
@@ -544,6 +543,7 @@ impl Stream {
 
         let mut ok = true;
         let chunk_beats = self.transfer_beats_per_chunk();
+        let mut transferred_total_bytes: usize = 0;
 
         // Check FIFO threshold constraints before starting transfer
         if self.would_violate_fifo_threshold(chunk_beats) {
@@ -694,23 +694,23 @@ impl Stream {
                 peri_addr = peri_addr.wrapping_add((beats * psize) as u32);
             }
 
+            transferred_total_bytes = transferred_total_bytes.saturating_add(beats * std::cmp::max(psize, msize));
+
             remaining_beats -= beats;
             self.ndtr = remaining_beats as u32;
         }
 
         // Update FIFO byte tracking after transfer
         if ok && self.fifo_enabled() {
-            let beat_bytes = std::cmp::max(psize, msize);
-            let transferred_bytes = chunk_beats * beat_bytes;
             match dir {
                 Dir::Read => {
                     // P2M: FIFO receives incoming data
-                    self.fifo_bytes = self.fifo_bytes.saturating_add(transferred_bytes);
+                    self.fifo_bytes = self.fifo_bytes.saturating_add(transferred_total_bytes);
                     self.fifo_bytes = std::cmp::min(self.fifo_bytes, self.fifo_threshold_words() * 4);
                 }
                 Dir::Write => {
                     // M2P: FIFO is drained by outgoing data
-                    self.fifo_bytes = self.fifo_bytes.saturating_sub(transferred_bytes);
+                    self.fifo_bytes = self.fifo_bytes.saturating_sub(transferred_total_bytes);
                 }
                 _ => {}
             }
@@ -867,7 +867,8 @@ impl Stream {
                 if (self.cr & 1) != 0 {
                     return StreamWriteResult::Noop;
                 }
-                self.fcr = value;
+                // Writable bits: FEIE(7), DMDIS(2), FTH(1:0). FS is read-only.
+                self.fcr = value & 0x87;
             }
             _ => {}
         }
