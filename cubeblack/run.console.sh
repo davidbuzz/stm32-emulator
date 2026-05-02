@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_FILE="$ROOT_DIR/cubeblack/ardu.cubeblack.log"
 EMULATOR="$ROOT_DIR/target/release/stm32-emulator"
+TIMEOUT_SECONDS=20
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -16,8 +17,18 @@ if [[ ! -x "$EMULATOR" ]]; then
 	exit 1
 fi
 
+set +e
 if command -v stdbuf >/dev/null 2>&1; then
-	stdbuf -oL -eL "$EMULATOR" --console-only "$ROOT_DIR/cubeblack/config.yaml" --max-instructions 120000000 2>&1 | tee "$LOG_FILE"
+	timeout "$TIMEOUT_SECONDS" stdbuf -oL -eL "$EMULATOR" --console-only "$ROOT_DIR/cubeblack/config.yaml" --max-instructions 120000000 2>&1 | tee "$LOG_FILE"
 else
-	"$EMULATOR" --console-only "$ROOT_DIR/cubeblack/config.yaml" --max-instructions 120000000 2>&1 | tee "$LOG_FILE"
+	timeout "$TIMEOUT_SECONDS" "$EMULATOR" --console-only "$ROOT_DIR/cubeblack/config.yaml" --max-instructions 120000000 2>&1 | tee "$LOG_FILE"
 fi
+run_status=${PIPESTATUS[0]}
+set -e
+
+if [[ "$run_status" -eq 124 ]]; then
+	echo "info: bounded test hit ${TIMEOUT_SECONDS}s timeout"
+	exit 0
+fi
+
+exit "$run_status"

@@ -6,6 +6,7 @@ EMULATOR="$ROOT_DIR/target/release/stm32-emulator"
 CONFIG="$ROOT_DIR/cubeblack/config.yaml"
 ELF="$ROOT_DIR/modules/ardupilot/build/CubeBlack/bin/arducopter"
 GDB_BIN="$(command -v arm-none-eabi-gdb || command -v gdb-multiarch)"
+TIMEOUT_SECONDS=20
 
 if [[ ! -x "$EMULATOR" ]]; then
   echo "ERROR: emulator binary not found at $EMULATOR"
@@ -35,7 +36,7 @@ EMULOG_EARLY=/tmp/gdb_smoke_early_server.log
 GDBLOG_EARLY=/tmp/gdb_smoke_early_client.log
 (
   cd "$ROOT_DIR/cubeblack"
-  timeout 20 "$EMULATOR" "$CONFIG" -v --gdb "$PORT_EARLY" >"$EMULOG_EARLY" 2>&1
+  timeout "$TIMEOUT_SECONDS" "$EMULATOR" "$CONFIG" -v --gdb "$PORT_EARLY" >"$EMULOG_EARLY" 2>&1
 ) &
 PID_EARLY=$!
 sleep 1
@@ -66,7 +67,7 @@ EMULOG_MAIN=/tmp/gdb_smoke_main_server.log
 GDBLOG_MAIN=/tmp/gdb_smoke_main_client.log
 (
   cd "$ROOT_DIR/cubeblack"
-  timeout 40 "$EMULATOR" "$CONFIG" -v --gdb "$PORT_MAIN" >"$EMULOG_MAIN" 2>&1
+  timeout "$TIMEOUT_SECONDS" "$EMULATOR" "$CONFIG" -v --gdb "$PORT_MAIN" >"$EMULOG_MAIN" 2>&1
 ) &
 PID_MAIN=$!
 sleep 1
