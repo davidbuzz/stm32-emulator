@@ -8049,3 +8049,325 @@
 [clk=78675465 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=78675465)
 [clk=78675465 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
 [clk=78675590 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=78843476 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=78843476 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=78843476 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=78843476 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=78843476 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=78843476)
+[clk=78843476 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=78843601 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=79011487 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=79011487 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79011487 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=79011487 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79011487 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=79011487)
+[clk=79011487 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=79011612 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=79179498 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=79179498 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79179498 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=79179498 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79179498 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=79179498)
+[clk=79179498 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=79179623 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=79347509 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=79347509 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79347509 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=79347509 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79347509 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=79347509)
+[clk=79347509 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=79347634 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=79515520 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=79515520 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79515520 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=79515520 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79515520 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=79515520)
+[clk=79515520 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=79515645 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=79683531 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=79683531 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79683531 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=79683531 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79683531 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=79683531)
+[clk=79683531 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=79683656 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=79851542 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=79851542 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79851542 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=79851542 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=79851542 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=79851542)
+[clk=79851542 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=79851667 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=80019553 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=80019553 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80019553 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=80019553 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80019553 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=80019553)
+[clk=80019553 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=80019678 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=80187564 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=80187564 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80187564 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=80187564 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80187564 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=80187564)
+[clk=80187564 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=80187689 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=80355575 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=80355575 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80355575 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=80355575 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80355575 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=80355575)
+[clk=80355575 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=80355700 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=80523586 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=80523586 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80523586 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=80523586 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80523586 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=80523586)
+[clk=80523586 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=80523711 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=80691597 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=80691597 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80691597 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=80691597 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80691597 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=80691597)
+[clk=80691597 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=80691722 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=80859608 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=80859608 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80859608 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=80859608 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=80859608 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=80859608)
+[clk=80859608 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=80859733 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=81027619 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=81027619 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81027619 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=81027619 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81027619 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=81027619)
+[clk=81027619 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=81027744 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=81195630 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=81195630 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81195630 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=81195630 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81195630 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=81195630)
+[clk=81195630 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=81195755 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=81363641 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=81363641 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81363641 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=81363641 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81363641 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=81363641)
+[clk=81363641 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=81363766 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=81531652 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=81531652 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81531652 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=81531652 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81531652 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=81531652)
+[clk=81531652 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=81531777 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=81699663 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=81699663 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81699663 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=81699663 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81699663 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=81699663)
+[clk=81699663 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=81699788 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=81867674 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=81867674 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81867674 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=81867674 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=81867674 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=81867674)
+[clk=81867674 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=81867799 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=82035685 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=82035685 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82035685 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=82035685 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82035685 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=82035685)
+[clk=82035685 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=82035810 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=82203696 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=82203696 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82203696 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=82203696 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82203696 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=82203696)
+[clk=82203696 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=82203821 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=82371707 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=82371707 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82371707 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=82371707 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82371707 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=82371707)
+[clk=82371707 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=82371832 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=82539718 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=82539718 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82539718 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=82539718 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82539718 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=82539718)
+[clk=82539718 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=82539843 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=82707729 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=82707729 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82707729 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=82707729 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82707729 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=82707729)
+[clk=82707729 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=82707854 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=82875740 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=82875740 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82875740 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=82875740 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=82875740 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=82875740)
+[clk=82875740 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=82875865 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=83043751 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=83043751 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83043751 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=83043751 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83043751 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=83043751)
+[clk=83043751 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=83043876 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=83211762 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=83211762 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83211762 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=83211762 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83211762 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=83211762)
+[clk=83211762 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=83211887 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=83379773 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=83379773 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83379773 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=83379773 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83379773 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=83379773)
+[clk=83379773 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=83379898 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=83547784 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=83547784 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83547784 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=83547784 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83547784 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=83547784)
+[clk=83547784 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=83547909 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=83715795 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=83715795 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83715795 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=83715795 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83715795 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=83715795)
+[clk=83715795 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=83715920 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=83883806 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=83883806 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83883806 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=83883806 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=83883806 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=83883806)
+[clk=83883806 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=83883931 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=84051817 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=84051817 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84051817 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=84051817 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84051817 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=84051817)
+[clk=84051817 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=84051942 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=84219828 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=84219828 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84219828 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=84219828 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84219828 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=84219828)
+[clk=84219828 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=84219953 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=84387839 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=84387839 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84387839 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=84387839 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84387839 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=84387839)
+[clk=84387839 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=84387964 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=84555850 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=84555850 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84555850 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=84555850 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84555850 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=84555850)
+[clk=84555850 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=84555975 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=84723861 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=84723861 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84723861 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=84723861 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84723861 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=84723861)
+[clk=84723861 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=84723986 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=84891872 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=84891872 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84891872 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=84891872 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=84891872 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=84891872)
+[clk=84891872 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=84891997 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=85059883 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=85059883 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85059883 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=85059883 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85059883 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=85059883)
+[clk=85059883 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=85060008 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=85227894 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=85227894 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85227894 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=85227894 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85227894 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=85227894)
+[clk=85227894 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=85228019 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=85395905 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=85395905 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85395905 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=85395905 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85395905 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=85395905)
+[clk=85395905 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=85396030 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=85563916 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=85563916 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85563916 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=85563916 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85563916 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=85563916)
+[clk=85563916 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=85564041 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=85731927 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=85731927 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85731927 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=85731927 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85731927 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=85731927)
+[clk=85731927 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=85732052 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=85899938 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=85899938 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85899938 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=85899938 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=85899938 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=85899938)
+[clk=85899938 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=85900063 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=86067949 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=86067949 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=86067949 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=86067949 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=86067949 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=86067949)
+[clk=86067949 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=86068074 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=86235960 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=86235960 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=86235960 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=86235960 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=86235960 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=86235960)
+[clk=86235960 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=86236085 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
+[clk=86403971 pc=0x0815ca54] DEBUG OTG_FS SOF injected (gintmsk=0xc03c3c18 gintsts_before=0x00000000 irq_latched=false)
+[clk=86403971 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=86403971 pc=0x0815ca54] DEBUG EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop
+[clk=86403971 pc=0x0815ca54] DEBUG NVIC arb basepri=0x00 active_prio=None irq50_pending=false irq50_enabled=true irq50_prio=0 irq67_pending=true irq67_enabled=true irq67_prio=224 selected=Some(67)
+[clk=86403971 pc=0x0815ca54] DEBUG EMULATOR outer_loop: dispatching deferred IRQ 67 (NUM_INSTRUCTIONS=86403971)
+[clk=86403971 pc=0x0815ca54] DEBUG NVIC dispatching IRQ 67 vector=0x815bed9
+[clk=86404096 pc=0x0815bee4] DEBUG NVIC arb basepri=0x30 active_prio=None irq50_pending=true irq50_enabled=true irq50_prio=0 irq67_pending=false irq67_enabled=true irq67_prio=224 selected=Some(50)
