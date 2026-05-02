@@ -15,6 +15,8 @@ pub struct Iwdg {
     rlr: u32,
     sr: u32,
     write_unlocked: bool,
+    running: bool,
+    counter: u16,
 }
 
 impl Iwdg {
@@ -26,6 +28,8 @@ impl Iwdg {
                 rlr: 0x0FFF,
                 sr: 0,
                 write_unlocked: false,
+                running: false,
+                counter: 0x0FFF,
             }))
         } else {
             None
@@ -34,6 +38,18 @@ impl Iwdg {
 }
 
 impl Peripheral for Iwdg {
+    fn step(&mut self, _sys: &System) {
+        if !self.running {
+            return;
+        }
+        if self.counter > 0 {
+            self.counter -= 1;
+        } else {
+            // Real hardware resets MCU; emulator keeps running and reloads for now.
+            self.counter = (self.rlr & 0x0FFF) as u16;
+        }
+    }
+
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match offset {
             0x00 => self.kr,
@@ -51,10 +67,11 @@ impl Peripheral for Iwdg {
                 match value {
                     0x5555 => self.write_unlocked = true,
                     0xAAAA => {
-                        // Reload key accepted; no timing model in this stub.
+                        self.counter = (self.rlr & 0x0FFF) as u16;
                     }
                     0xCCCC => {
-                        // Start key accepted; no reset countdown model yet.
+                        self.running = true;
+                        self.counter = (self.rlr & 0x0FFF) as u16;
                     }
                     _ => {}
                 }

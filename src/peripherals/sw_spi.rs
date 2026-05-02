@@ -25,7 +25,8 @@ pub struct SoftwareSpiConfig {
     pub clk: String,
     pub miso: String,
     pub mosi: String,
-    // TODO clk polarity
+    #[serde(default)]
+    pub cpol: bool,
 }
 
 #[derive(Default)]
@@ -81,7 +82,7 @@ impl SoftwareSpi {
             self.data_miso = 0;
             self.bit_index = 0;
 
-            self.clk = false;
+            self.clk = self.config.cpol;
             self.mosi = false;
             self.miso = false;
         }
@@ -91,8 +92,11 @@ impl SoftwareSpi {
     pub fn write_clk(&mut self, sys: &System, value: bool) {
         if self.cs { return; }
 
-        // clock rise
-        if !self.clk && value {
+        let rising = !self.clk && value;
+        let falling = self.clk && !value;
+        let sample_edge = if self.config.cpol { falling } else { rising };
+
+        if sample_edge {
             self.miso = self.data_miso & 0x80 != 0;
             self.data_miso <<= 1;
 

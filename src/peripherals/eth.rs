@@ -87,7 +87,10 @@ impl Peripheral for Ethernet {
             0x0028 => self.macrwuffr = value,
             0x002C => self.macpmtcsr = value,
             0x0034 => self.macdbgr = value,
-            0x0038 => self.macsr = value,
+            0x0038 => {
+                // MACSR status bits are generally cleared by writing 1.
+                self.macsr &= !value;
+            }
             0x003C => self.macimr = value,
             0x0040 => self.maca0hr = value,
             0x0044 => self.maca0lr = value,

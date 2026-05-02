@@ -92,7 +92,10 @@ impl Spi {
     }
 
     fn build_sr(&self) -> u32 {
-        let mut sr = SPI_SR_TXE;
+        let mut sr = 0;
+        if (self.sr & SPI_SR_BSY) == 0 {
+            sr |= SPI_SR_TXE;
+        }
         if self.rxne {
             sr |= SPI_SR_RXNE;
         }

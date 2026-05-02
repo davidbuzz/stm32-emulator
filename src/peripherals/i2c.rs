@@ -210,6 +210,12 @@ impl I2c {
         slave.regs[slave.pointer as usize] = value;
         slave.pointer = slave.pointer.wrapping_add(1);
     }
+
+    fn schedule_error_irq_if_needed(&mut self) {
+        if (self.cr2 & I2C_CR2_ITERREN) != 0 && (self.sr1 & I2C_ERROR_MASK) != 0 {
+            self.pending_error_irq = Some(0);
+        }
+    }
 }
 
 impl Peripheral for I2c {
@@ -294,10 +300,15 @@ impl Peripheral for I2c {
                     }
                 } else {
                     self.handle_data_write((value & 0xff) as u8);
-                    self.sr1 |= I2C_SR1_TXE;
+                    self.sr1 |= I2C_SR1_TXE | I2C_SR1_BTF;
+                    self.pending_event_irq = Some(0);
                 }
             }
-            0x0014 => self.sr1 &= value, // Write-0-to-clear SR1 flags (BERR, ARLO, AF, OVR, TIMEOUT, etc.)
+            0x0014 => {
+                // Write-0-to-clear SR1 flags (BERR, ARLO, AF, OVR, TIMEOUT, etc.).
+                self.sr1 &= value;
+                self.schedule_error_irq_if_needed();
+            }
             0x0018 => self.sr2 = value,
             0x001c => {
                 // CCR: I2C clock control register. Validates that T_high/T_low timing is configured.

@@ -11,6 +11,7 @@ use super::Peripheral;
 pub struct Rtc {
     regs: [u32; 0x24],
     wpr_unlocked: bool,
+    wpr_stage: u8,
 }
 
 impl Rtc {
@@ -19,6 +20,7 @@ impl Rtc {
             let mut rtc = Self {
                 regs: [0; 0x24],
                 wpr_unlocked: false,
+                wpr_stage: 0,
             };
             // ISR reset-like state with INITF clear and RSF set approximation.
             rtc.regs[0x0C / 4] = 1 << 5;
@@ -38,12 +40,19 @@ impl Peripheral for Rtc {
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
         // WPR is at 0x24 and is byte-wide; handle it separately.
         if offset == 0x24 {
-            if value & 0xFF == 0xCA {
-                self.wpr_unlocked = false;
-            } else if value & 0xFF == 0x53 {
-                self.wpr_unlocked = true;
-            } else {
-                self.wpr_unlocked = false;
+            match value & 0xFF {
+                0xCA => {
+                    self.wpr_unlocked = false;
+                    self.wpr_stage = 1;
+                }
+                0x53 if self.wpr_stage == 1 => {
+                    self.wpr_unlocked = true;
+                    self.wpr_stage = 0;
+                }
+                _ => {
+                    self.wpr_unlocked = false;
+                    self.wpr_stage = 0;
+                }
             }
             return;
         }

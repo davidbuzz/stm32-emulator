@@ -38,6 +38,8 @@ pub struct Rcc {
     plli2scfgr: u32,
     pllsaicfgr: u32,
     dckcfgr: u32,
+    hse_ready_delay: u8,
+    pll_ready_delay: u8,
 }
 
 impl Rcc {
@@ -70,6 +72,8 @@ impl Rcc {
                 plli2scfgr: 0x2000_3000,
                 pllsaicfgr: 0x2400_3000,
                 dckcfgr: 0,
+                hse_ready_delay: 0,
+                pll_ready_delay: 0,
             }))
         } else {
             None
@@ -94,13 +98,13 @@ impl Rcc {
             self.cr &= !HSIRDY;
         }
 
-        if self.cr & HSEON != 0 {
+        if self.cr & HSEON != 0 && self.hse_ready_delay == 0 {
             self.cr |= HSERDY;
         } else {
             self.cr &= !HSERDY;
         }
 
-        if self.cr & PLLON != 0 {
+        if self.cr & PLLON != 0 && self.pll_ready_delay == 0 {
             self.cr |= PLLRDY;
         } else {
             self.cr &= !PLLRDY;
@@ -185,6 +189,16 @@ impl Rcc {
 
 
 impl Peripheral for Rcc {
+    fn step(&mut self, _sys: &System) {
+        if self.hse_ready_delay > 0 {
+            self.hse_ready_delay -= 1;
+        }
+        if self.pll_ready_delay > 0 {
+            self.pll_ready_delay -= 1;
+        }
+        self.update_cr_ready_bits();
+    }
+
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match offset {
             0x0000 => {
@@ -231,7 +245,16 @@ impl Peripheral for Rcc {
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
         match offset {
             0x0000 => {
+                const HSEON: u32 = 1 << 16;
+                const PLLON: u32 = 1 << 24;
+                let old = self.cr;
                 self.cr = value;
+                if (old & HSEON) == 0 && (value & HSEON) != 0 {
+                    self.hse_ready_delay = 2;
+                }
+                if (old & PLLON) == 0 && (value & PLLON) != 0 {
+                    self.pll_ready_delay = 3;
+                }
                 self.update_cr_ready_bits();
             }
             0x0004 => {

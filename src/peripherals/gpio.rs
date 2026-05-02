@@ -91,6 +91,7 @@ pub struct Gpio {
     afrl: u32,
     afrh: u32,
     od_prev: u32,  // Track previous ODR state for pin transition detection
+    locked: bool,
 }
 
 impl Gpio {
@@ -151,6 +152,9 @@ impl Peripheral for Gpio {
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
         match offset {
             0x0000 => {
+                if self.locked {
+                    return;
+                }
                 Self::iter_port_reg_changes(self.mode, value, 2, |pin, v| {
                     let config = match v {
                         0b00 => "input",
@@ -164,6 +168,9 @@ impl Peripheral for Gpio {
                 self.mode = value;
             }
             0x0004 => {
+                if self.locked {
+                    return;
+                }
                 Self::iter_port_reg_changes(self.otype, value, 1, |pin, v| {
                     let config = match v {
                         0b0 => "push-pull",
@@ -175,6 +182,9 @@ impl Peripheral for Gpio {
                 self.otype = value;
             }
             0x0008 => {
+                if self.locked {
+                    return;
+                }
                 Self::iter_port_reg_changes(self.ospeed, value, 2, |pin, v| {
                     let config = match v {
                         0b00 => "low",
@@ -188,6 +198,9 @@ impl Peripheral for Gpio {
                 self.ospeed = value;
             }
             0x000C => {
+                if self.locked {
+                    return;
+                }
                 Self::iter_port_reg_changes(self.pupd, value, 2, |pin, v| {
                     let config = match v {
                         0b00 => "regular",
@@ -253,14 +266,23 @@ impl Peripheral for Gpio {
             0x001C => {
                 trace!("GPIO{} port locked", self.port_letter);
                 self.lck = value;
+                if (value & (1 << 16)) != 0 {
+                    self.locked = true;
+                }
             }
             0x0020 => {
+                if self.locked {
+                    return;
+                }
                 Self::iter_port_reg_changes(self.afrl, value, 4, |pin, v| {
                     trace!("{} alternate_cfg=AF{}", self.port_str(pin), v);
                 });
                 self.afrl = value;
             }
             0x0024 => {
+                if self.locked {
+                    return;
+                }
                 Self::iter_port_reg_changes(self.afrh, value, 4, |pin, v| {
                     trace!("{} alternate_cfg=AF{}", self.port_str(pin+8), v);
                 });

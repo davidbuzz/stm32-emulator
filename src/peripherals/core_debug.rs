@@ -54,6 +54,7 @@ impl CoreDebug {
     const DWT_FUNCTION0_ADDR: u32 = 0xE000_1060;
     const TRCENA: u32 = 1 << 24;
     const CYCCNTENA: u32 = 1;
+    const DEMCR_WRITABLE_MASK: u32 = (1 << 24) | (1 << 16);
 
     pub fn handles(&self, addr: u32) -> bool {
         matches!(addr,
@@ -127,11 +128,13 @@ impl CoreDebug {
 
         match addr {
             Self::DEMCR_ADDR => {
-                self.demcr = value;
+                self.demcr = (self.demcr & !Self::DEMCR_WRITABLE_MASK)
+                    | (value & Self::DEMCR_WRITABLE_MASK);
                 self.reset_clock_reference();
             }
             Self::DWT_CTRL_ADDR => {
-                self.dwt_ctrl = value;
+                // Keep this narrow for now; CYCCNTENA is the main consumed control bit.
+                self.dwt_ctrl = value & Self::CYCCNTENA;
                 self.reset_clock_reference();
             }
             Self::DWT_CYCCNT_ADDR => {
@@ -139,23 +142,23 @@ impl CoreDebug {
                 self.reset_clock_reference();
             }
             Self::DWT_CPICNT_ADDR => {
-                self.dwt_cpicnt = value;
+                self.dwt_cpicnt = value & 0xFF;
                 self.reset_clock_reference();
             }
             Self::DWT_EXCCNT_ADDR => {
-                self.dwt_exccnt = value;
+                self.dwt_exccnt = value & 0xFF;
                 self.reset_clock_reference();
             }
             Self::DWT_SLEEPCNT_ADDR => {
-                self.dwt_sleepcnt = value;
+                self.dwt_sleepcnt = value & 0xFF;
                 self.reset_clock_reference();
             }
             Self::DWT_LSUCNT_ADDR => {
-                self.dwt_lsucnt = value;
+                self.dwt_lsucnt = value & 0xFF;
                 self.reset_clock_reference();
             }
             Self::DWT_FOLDCNT_ADDR => {
-                self.dwt_foldcnt = value;
+                self.dwt_foldcnt = value & 0xFF;
                 self.reset_clock_reference();
             }
             Self::DWT_PCSR_ADDR => {

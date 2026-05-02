@@ -19,6 +19,7 @@ pub struct Rng {
     cr: u32,
     sr: u32,
     lfsr: u32,
+    drdy_delay: u8,
 }
 
 impl Rng {
@@ -28,6 +29,7 @@ impl Rng {
                 cr: 0,
                 sr: 0,
                 lfsr: 0x1234_5678,
+                drdy_delay: 0,
             }))
         } else {
             None
@@ -46,19 +48,31 @@ impl Rng {
 }
 
 impl Peripheral for Rng {
+    fn step(&mut self, _sys: &System) {
+        if (self.cr & RNG_CR_RNGEN) == 0 {
+            self.sr &= !RNG_SR_DRDY;
+            return;
+        }
+        if self.drdy_delay > 0 {
+            self.drdy_delay -= 1;
+        }
+        if self.drdy_delay == 0 {
+            self.sr |= RNG_SR_DRDY;
+        }
+    }
+
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         match offset {
             0x00 => self.cr,
             0x04 => {
-                let mut sr = self.sr & (RNG_SR_SECS | RNG_SR_CECS);
-                if self.cr & RNG_CR_RNGEN != 0 {
-                    sr |= RNG_SR_DRDY;
-                }
-                sr
+                self.sr & (RNG_SR_SECS | RNG_SR_CECS | RNG_SR_DRDY)
             }
             0x08 => {
-                if self.cr & RNG_CR_RNGEN != 0 {
-                    self.next_word()
+                if self.cr & RNG_CR_RNGEN != 0 && (self.sr & RNG_SR_DRDY) != 0 {
+                    let v = self.next_word();
+                    self.sr &= !RNG_SR_DRDY;
+                    self.drdy_delay = 2;
+                    v
                 } else {
                     0
                 }
@@ -69,7 +83,15 @@ impl Peripheral for Rng {
 
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
         match offset {
-            0x00 => self.cr = value & RNG_CR_RNGEN,
+            0x00 => {
+                self.cr = value & RNG_CR_RNGEN;
+                if (self.cr & RNG_CR_RNGEN) != 0 {
+                    self.drdy_delay = 1;
+                } else {
+                    self.sr &= !RNG_SR_DRDY;
+                    self.drdy_delay = 0;
+                }
+            }
             0x04 => {
                 // SR is status-only on hardware; keep only sticky error bits clearable by write-1.
                 self.sr &= !(value & (RNG_SR_SECS | RNG_SR_CECS));

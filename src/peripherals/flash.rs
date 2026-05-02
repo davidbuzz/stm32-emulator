@@ -21,7 +21,18 @@ const FLASH_OPTKEY2: u32 = 0x4C5D_6E7F;
 
 const SR_EOP: u32   = 1 << 0;   // End of operation (write-1-to-clear)
 const SR_OPERR: u32 = 1 << 1;   // Operation error
+const SR_PGAERR: u32 = 1 << 5;  // Programming alignment error
+const SR_PGPERR: u32 = 1 << 6;  // Programming parallelism error
+const SR_PGSERR: u32 = 1 << 7;  // Programming sequence error
 const SR_BSY: u32   = 1 << 16;  // Busy (read-only, cleared by hardware)
+
+const FLASH_SR_WRITECLEAR_MASK: u32 =
+    SR_EOP | SR_OPERR | SR_PGAERR | SR_PGPERR | SR_PGSERR;
+
+const FLASH_ACR_WRITABLE_MASK: u32 = 0x0000_071F;
+
+const FLASH_CR_WRITABLE_MASK: u32 =
+    CR_PG | CR_SER | CR_MER | CR_STRT | (0x1F << 3) | CR_LOCK;
 
 const CR_PG: u32    = 1 << 0;   // Programming
 const CR_SER: u32   = 1 << 1;   // Sector erase
@@ -88,7 +99,7 @@ impl Peripheral for Flash {
 
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
         match offset {
-            0x00 => self.acr = value,
+            0x00 => self.acr = value & FLASH_ACR_WRITABLE_MASK,
             0x04 => {
                 // KEYR: two-step unlock sequence.  Wrong key re-locks (bus fault on real HW,
                 // but we just reset the sequence silently to avoid breaking firmware that retries).
@@ -118,16 +129,16 @@ impl Peripheral for Flash {
             }
             0x0c => {
                 // SR: write-1-to-clear; BSY is read-only (firmware cannot clear BSY by writing SR).
-                self.sr &= !(value & !SR_BSY);
+                self.sr &= !(value & FLASH_SR_WRITECLEAR_MASK);
             }
             0x10 => {
                 if self.cr & CR_LOCK != 0 {
                     // CR writes are ignored while locked (hardware behavior).
-                    self.sr |= SR_OPERR;
+                    self.sr |= SR_OPERR | SR_PGSERR;
                     trace!("FLASH CR write ignored (locked): value=0x{:08x}", value);
                     return;
                 }
-                self.cr = value;
+                self.cr = value & FLASH_CR_WRITABLE_MASK;
 
                 // Firmware locking: writing LOCK=1 re-locks the controller.
                 if value & CR_LOCK != 0 {
@@ -138,12 +149,18 @@ impl Peripheral for Flash {
                 // STRT triggers erase or program; begin deferred BSY→EOP sequence.
                 if value & CR_STRT != 0 && value & (CR_SER | CR_MER | CR_PG) != 0 {
                     self.sr |= SR_BSY;
-                    self.op_countdown = 2; // completes after 2 step() calls
+                    self.op_countdown = if value & CR_MER != 0 {
+                        8
+                    } else if value & CR_SER != 0 {
+                        4
+                    } else {
+                        2
+                    };
                     let op = if value & CR_MER != 0 { "mass erase" }
                              else if value & CR_SER != 0 {
                                  let snb = (value >> 3) & 0x1F;
                                  if snb > 11 {
-                                     self.sr |= SR_OPERR;
+                                     self.sr |= SR_OPERR | SR_PGSERR;
                                      self.sr &= !SR_BSY;
                                      self.op_countdown = 0;
                                      self.cr &= !CR_STRT;
@@ -158,7 +175,7 @@ impl Peripheral for Flash {
                     debug!("FLASH {} started (CR=0x{:08x})", op, value);
                 } else if value & CR_STRT != 0 {
                     // START with no selected operation is invalid.
-                    self.sr |= SR_OPERR;
+                    self.sr |= SR_OPERR | SR_PGSERR;
                     self.cr &= !CR_STRT;
                     warn!("FLASH STRT without PG/SER/MER (CR=0x{:08x})", value);
                 }

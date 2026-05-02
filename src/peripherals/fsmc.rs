@@ -113,6 +113,14 @@ pub struct Bank {
 }
 
 impl Bank {
+    const BCR_WRITABLE_MASK: u32 = 0x000F_FFD7;
+    const BTR_WRITABLE_MASK: u32 = 0xFFFF_FFFF;
+    const BWTR_WRITABLE_MASK: u32 = 0x0FFF_FFFF;
+    const PCR_WRITABLE_MASK: u32 = 0x0000_FFFF;
+    const PMEM_WRITABLE_MASK: u32 = 0xFFFF_FFFF;
+    const PATT_WRITABLE_MASK: u32 = 0xFFFF_FFFF;
+    const PIO_WRITABLE_MASK: u32 = 0xFFFF_FFFF;
+
     pub fn new(bank: usize, ext_devices: &ExtDevices) -> Self {
         let name = format!("FSMC.BANK{}", bank+1);
 
@@ -175,14 +183,14 @@ impl Bank {
     fn write_reg(&mut self, _sys: &System, reg: Reg, value: u32) {
         trace!("{} write reg={:?} value=0x{:08x}", self.name, reg, value);
         match reg {
-            Reg::BCR  => self.bcr  = value,
-            Reg::BTR  => self.btr  = value,
-            Reg::BWTR => self.bwtr = value,
-            Reg::PCR  => self.pcr  = value,
+            Reg::BCR  => self.bcr  = value & Self::BCR_WRITABLE_MASK,
+            Reg::BTR  => self.btr  = value & Self::BTR_WRITABLE_MASK,
+            Reg::BWTR => self.bwtr = value & Self::BWTR_WRITABLE_MASK,
+            Reg::PCR  => self.pcr  = value & Self::PCR_WRITABLE_MASK,
             Reg::SR   => {} // SR is read-only (FEMPT is status)
-            Reg::PMEM => self.pmem = value,
-            Reg::PATT => self.patt = value,
-            Reg::PIO  => self.pio  = value,
+            Reg::PMEM => self.pmem = value & Self::PMEM_WRITABLE_MASK,
+            Reg::PATT => self.patt = value & Self::PATT_WRITABLE_MASK,
+            Reg::PIO  => self.pio  = value & Self::PIO_WRITABLE_MASK,
             Reg::ECCR | Reg::Invalid => {}
         }
     }

@@ -16,8 +16,10 @@ use crate::system::System;
 use super::Peripheral;
 
 const ADC_SR_EOC: u32 = 1 << 1;
+const ADC_SR_AWD: u32 = 1 << 0;
 const ADC_SR_OVR: u32 = 1 << 5;
 const ADC_CR1_EOCIE: u32 = 1 << 5;   // EOC interrupt enable
+const ADC_CR1_AWDIE: u32 = 1 << 6;   // Analog watchdog interrupt enable
 const ADC_CR1_OVRIE: u32 = 1 << 26;  // Overrun interrupt enable
 const ADC_CR2_SWSTART: u32 = 1 << 30; // Software start of regular channel conversion
 
@@ -61,6 +63,7 @@ pub struct Adc {
     dr: u16,                   // Last conversion result
     last_conversion_channel: u8, // Channel that was last converted
     conversion_in_progress: bool,
+    regular_rank: u8,
 }
 
 impl Adc {
@@ -79,16 +82,20 @@ impl Adc {
         }
     }
 
-    fn get_channel_from_sqr(&self) -> u8 {
-        // SQR3 bits 4:0 contain the first channel in regular sequence (L=0 case)
-        // For simplicity, extract channel 0 from SQR3[4:0]
-        let l = (self.sqr1 >> 20) & 0x0F;
-        if l == 0 {
-            // Single channel conversion: use first (and only) entry in SQR3
-            (self.sqr3 & 0x1F) as u8
+    fn regular_seq_len(&self) -> u8 {
+        // SQR1[L] encodes sequence length as (L+1).
+        (((self.sqr1 >> 20) & 0x0F) as u8).saturating_add(1)
+    }
+
+    fn regular_rank_channel(&self, rank: u8) -> u8 {
+        // Regular ranks 1..16 map as: SQR3 ranks 1..6, SQR2 ranks 7..12, SQR1 ranks 13..16.
+        let r = rank.clamp(1, 16);
+        if r <= 6 {
+            ((self.sqr3 >> ((r - 1) * 5)) & 0x1F) as u8
+        } else if r <= 12 {
+            ((self.sqr2 >> ((r - 7) * 5)) & 0x1F) as u8
         } else {
-            // Multi-channel sequence: for now return first channel
-            (self.sqr3 & 0x1F) as u8
+            ((self.sqr1 >> ((r - 13) * 5)) & 0x1F) as u8
         }
     }
 
@@ -107,7 +114,11 @@ impl Adc {
 
         // Mark conversion starting
         self.conversion_in_progress = true;
-        self.last_conversion_channel = self.get_channel_from_sqr();
+        let seq_len = self.regular_seq_len();
+        if self.regular_rank == 0 || self.regular_rank > seq_len {
+            self.regular_rank = 1;
+        }
+        self.last_conversion_channel = self.regular_rank_channel(self.regular_rank);
         
         // Perform conversion immediately (simplified: no actual delay)
         self.perform_conversion();
@@ -117,6 +128,8 @@ impl Adc {
         if (self.cr1 & ADC_CR1_EOCIE) != 0 {
             self.signal_irq(sys, "EOC");
         }
+
+        self.regular_rank = if self.regular_rank >= seq_len { 1 } else { self.regular_rank + 1 };
 
         self.conversion_in_progress = false;
     }
@@ -129,6 +142,13 @@ impl Adc {
             ADC_CHANNEL_VALUES[0]
         };
         self.dr = result;
+
+        // Basic analog watchdog emulation for regular conversions.
+        let lower = (self.ltr & 0x0FFF) as u16;
+        let upper = (self.htr & 0x0FFF) as u16;
+        if result < lower || result > upper {
+            self.sr |= ADC_SR_AWD;
+        }
     }
 
     fn signal_irq(&self, sys: &System, _reason: &str) {
@@ -146,7 +166,7 @@ impl Adc {
 impl Peripheral for Adc {
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
         match offset {
-            0x0000 => self.sr | ADC_SR_EOC, // EOC always asserted (ready)
+            0x0000 => self.sr,
             0x0004 => self.cr1,
             0x0008 => self.cr2,
             0x000C => self.smpr1,
@@ -183,6 +203,9 @@ impl Peripheral for Adc {
                 if (self.cr1 & ADC_CR1_EOCIE) != 0 && (self.sr & ADC_SR_EOC) != 0 {
                     self.signal_irq(sys, "EOC_pending");
                 }
+                if (self.cr1 & ADC_CR1_AWDIE) != 0 && (self.sr & ADC_SR_AWD) != 0 {
+                    self.signal_irq(sys, "AWD_pending");
+                }
             }
             0x0008 => {
                 self.cr2 = value;
@@ -201,7 +224,10 @@ impl Peripheral for Adc {
             0x0028 => self.ltr = value,
             0x002C => self.sqr1 = value,
             0x0030 => self.sqr2 = value,
-            0x0034 => self.sqr3 = value,
+            0x0034 => {
+                self.sqr3 = value;
+                self.regular_rank = 1;
+            }
             0x0038 => self.jsqr = value,
             _ => {}
         }

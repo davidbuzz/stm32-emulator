@@ -63,6 +63,11 @@ const SHORT_R7_IF_COND: u32 = 0x0000_01AA;
 const FAKE_CID: [u32; 4] = [0x0353_4445, 0x4D55_3031, 0x1012_3456, 0x7801_7AFE];
 const FAKE_CSD: [u32; 4] = [0x4000_0032, 0x5B59_0000, 0x003F_4000, 0x0000_80FE];
 
+const STA_CLEARABLE_MASK: u32 =
+    STA_CCRCFAIL | STA_DCRCFAIL | STA_CTIMEOUT | STA_DTIMEOUT |
+    STA_TXUNDERR | STA_RXOVERR | STA_CMDREND | STA_CMDSENT |
+    STA_DATAEND | STA_STBITERR;
+
 #[derive(Default)]
 pub struct Sdio {
     power: u32,
@@ -464,7 +469,7 @@ impl Peripheral for Sdio {
             }
             0x38 => {
                 // ICR: clear indicated status bits
-                self.sta &= !value;
+                self.sta &= !(value & STA_CLEARABLE_MASK);
             }
             0x3C => {
                 self.mask = value;

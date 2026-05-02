@@ -52,12 +52,13 @@ impl Peripheral for Scb {
                     .next_pending_intr()
                     .map(|irq| (16 + irq) as u32)
                     .unwrap_or(0);
+                let ret_to_base = if active == 0 { 1 } else { 0 };
 
                 active
                     | (pending << 12)
                     | (((nvic.is_intr_pending(irq::SYSTICK) as u32) << 26))
                     | (((nvic.is_intr_pending(irq::PENDSV) as u32) << 28))
-                    | (1 << 11)
+                    | (ret_to_base << 11)
             }
             0x0008 => sys.p.nvic.borrow().vector_table_addr,
             0x000c => self.aircr | AIRCR_VECTKEY,
@@ -90,16 +91,17 @@ impl Peripheral for Scb {
                 // bit 26: set systick pending
                 // bit 27: clear PendSV pending
                 // bit 28: set PendSV pending
-                if value & (1 << 25) != 0 {
+                let control = value & ((1 << 25) | (1 << 26) | (1 << 27) | (1 << 28));
+                if control & (1 << 25) != 0 {
                     sys.p.nvic.borrow_mut().clear_intr_pending(irq::SYSTICK);
                 }
-                if value & (1 << 26) != 0 {
+                if control & (1 << 26) != 0 {
                     sys.p.nvic.borrow_mut().set_intr_pending(irq::SYSTICK);
                 }
-                if value & (1 << 27) != 0 {
+                if control & (1 << 27) != 0 {
                     sys.p.nvic.borrow_mut().clear_intr_pending(irq::PENDSV);
                 }
-                if value & (1 << 28) != 0 {
+                if control & (1 << 28) != 0 {
                     sys.p.nvic.borrow_mut().set_intr_pending(irq::PENDSV);
                 }
             }

@@ -22,6 +22,8 @@ pub struct Exti {
     pr: u32,    // pending register (write 1 to clear)
 }
 
+const EXTI_LINE_MASK: u32 = (1u32 << 23) - 1;
+
 impl Exti {
     pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
         if name == "EXTI" {
@@ -80,24 +82,23 @@ impl Peripheral for Exti {
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
         match offset {
             0x00 => {
-                self.imr = value;
+                self.imr = value & EXTI_LINE_MASK;
             }
-            0x04 => self.emr = value,
-            0x08 => self.rtsr = value,
-            0x0c => self.ftsr = value,
+            0x04 => self.emr = value & EXTI_LINE_MASK,
+            0x08 => self.rtsr = value & EXTI_LINE_MASK,
+            0x0c => self.ftsr = value & EXTI_LINE_MASK,
             0x10 => {
-                // Writing a bit triggers the corresponding EXTI line (software interrupt).
-                // Only trigger newly-set bits (rising edge on SWIER bit).
-                let newly_set = value & !self.swier;
-                self.swier = value;
+                // SWIER: writing 1 sets bit and generates corresponding software event/interrupt.
+                let trigger_bits = value & EXTI_LINE_MASK;
+                self.swier |= trigger_bits;
                 for line in 0u8..=22 {
-                    if (newly_set >> line) & 1 != 0 {
+                    if (trigger_bits >> line) & 1 != 0 {
                         self.trigger_line(sys, line);
                     }
                 }
             }
             // Write 1 to clear the corresponding pending bit.
-            0x14 => self.pr &= !value,
+            0x14 => self.pr &= !(value & EXTI_LINE_MASK),
             _ => {}
         }
     }

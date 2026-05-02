@@ -44,6 +44,20 @@ impl Crc {
         }
         crc
     }
+
+    fn update_crc_value(mut crc: u32, data: u32, bits: u8) -> u32 {
+        // MSB-first over selected payload width (8/16/32).
+        let mut x = if bits < 32 { data << (32 - bits) } else { data };
+        for _ in 0..bits {
+            let bit = ((x >> 31) ^ (crc >> 31)) & 1;
+            crc <<= 1;
+            if bit != 0 {
+                crc ^= 0x04C11DB7;
+            }
+            x <<= 1;
+        }
+        crc
+    }
 }
 
 impl Peripheral for Crc {
@@ -59,7 +73,14 @@ impl Peripheral for Crc {
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
         match offset {
             0x00 => {
-                self.dr = Self::update_crc_word(self.dr, value);
+                // Heuristic width handling: many firmware paths use 8/16-bit writes.
+                self.dr = if value <= 0xFF {
+                    Self::update_crc_value(self.dr, value & 0xFF, 8)
+                } else if value <= 0xFFFF {
+                    Self::update_crc_value(self.dr, value & 0xFFFF, 16)
+                } else {
+                    Self::update_crc_word(self.dr, value)
+                };
             }
             0x04 => self.idr = value & 0xFF,
             0x08 => {

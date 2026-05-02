@@ -15,6 +15,11 @@ pub struct Pwr {
     csr: u32,
 }
 
+const PWR_CR_WRITABLE_MASK: u32 =
+    (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) |
+    (1 << 8) | (1 << 9) | (0x3 << 14) |
+    (1 << 16) | (1 << 17) | (1 << 18);
+
 impl Pwr {
     pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
         if name == "PWR" {
@@ -82,7 +87,7 @@ impl Peripheral for Pwr {
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
         match offset {
             0x00 => {
-                self.cr = value;
+                self.cr = value & PWR_CR_WRITABLE_MASK;
                 self.update_ready_bits();
             }
             0x04 => {
