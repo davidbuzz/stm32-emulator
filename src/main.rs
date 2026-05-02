@@ -28,6 +28,7 @@ extern crate log;
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Config file
+    #[clap(default_value = "config.yaml")]
     config: String,
 
     /// Verbosity. Can be repeated. -vvvv is the maximum.

@@ -825,6 +825,10 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         };
         pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc");
 
+        // Keep CDC output flowing during normal execution so visibility is not
+        // tied to stop conditions (Ctrl-C, timeout, or max-instruction exits).
+        crate::peripherals::otg_fs::flush_cdc_pending_output();
+
         if let Some(mut irq) = deferred_irq.borrow_mut().take() {
             let selected_irq = {
                 sys.p.nvic.borrow_mut().take_pending_interrupt(&sys)

@@ -1,9 +1,1 @@
 console-only: streaming USB CDC EP1 bytes (other emulator logs suppressed)
-Initialised Storage type=1
-
-
-Init ArduCopter V4.8.0-dev (977fd8ec)
-
-Free RAM: 141424
-Firmware change: erasing EEPROM...
-done.

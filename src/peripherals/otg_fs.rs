@@ -40,6 +40,7 @@ const GNPTXSTS_RESET: u32 = 0x0008_0200;
 const CID_RESET: u32 = 0x0000_1000;
 const OTG_STARTUP_EVENT_DELAY: u32 = 2048;
 const OTG_SOF_PERIOD: u32 = 168_000; // ~1ms at 168MHz
+const CDC_PERIODIC_FLUSH_INTERVAL: u64 = 200_000;
 const EP_COUNT: usize = 4;
 const DOEPINT_XFRC: u32 = 1 << 0;
 const DOEPINT_STUP: u32 = 1 << 3;
@@ -154,6 +155,7 @@ struct OtgFsState {
     ep_txfe_was_fired: [bool; EP_COUNT],      // tracks whether TXFE fired for each pending EP transfer
     enum_stage: UsbEnumStage,
     cdc_line_buf: Vec<u8>,
+    cdc_last_periodic_flush_clk: u64,
     /// RX FIFO level in words: tracks pending data for enumeration and generic transfers.
     rx_fifo_level: u32,
     /// TX FIFO levels per OUT endpoint: tracks space available in each OUT endpoint TX FIFO.
@@ -842,6 +844,25 @@ impl Peripheral for OtgFs {
                 }
                 // else: waiting for DIEPEMPMSK to be written (TXFE not yet fired)
             }
+        }
+
+        // Emit partial CDC output periodically during long-running transfers so
+        // the operator does not need to interrupt execution to see progress.
+        let now_clk = crate::emulator::NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+        if !shared.cdc_line_buf.is_empty()
+            && now_clk.saturating_sub(shared.cdc_last_periodic_flush_clk) >= CDC_PERIODIC_FLUSH_INTERVAL
+        {
+            let line = String::from_utf8_lossy(&shared.cdc_line_buf).trim().to_string();
+            if !line.is_empty() {
+                if crate::console_only() {
+                    let _ = writeln!(io::stdout(), "{}", line);
+                    let _ = io::stdout().flush();
+                } else {
+                    info!("USB-CDC ep1 '{}'", line);
+                }
+            }
+            shared.cdc_line_buf.clear();
+            shared.cdc_last_periodic_flush_clk = now_clk;
         }
 
         if shared.gahbcfg & GAHBCFG_GINT == 0 || shared.masked_interrupts() == 0 {
