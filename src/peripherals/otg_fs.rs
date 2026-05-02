@@ -926,7 +926,8 @@ pub fn fifo_write(ep: usize, word: u32) {
                     let line_owned = line.trim().to_string();
                     if !line_owned.is_empty() {
                         if crate::console_only() {
-                            println!("{}", line_owned);
+                            let _ = writeln!(io::stdout(), "{}", line_owned);
+                            let _ = io::stdout().flush();
                         } else {
                             info!("USB-CDC ep{} '{}'", ep, line_owned);
                         }
@@ -938,7 +939,8 @@ pub fn fifo_write(ep: usize, word: u32) {
                 if s.cdc_line_buf.len() >= 256 {
                     let line = String::from_utf8_lossy(&s.cdc_line_buf).trim().to_string();
                     if crate::console_only() {
-                        println!("{}", line);
+                        let _ = writeln!(io::stdout(), "{}", line);
+                        let _ = io::stdout().flush();
                     } else {
                         info!("USB-CDC ep{} '{}'", ep, line);
                     }
@@ -946,5 +948,28 @@ pub fn fifo_write(ep: usize, word: u32) {
                 }
             }
         }
+    })
+}
+
+/// Flush any pending CDC line-buffer bytes that did not end with LF/CR/NUL yet.
+/// This allows bounded runs to emit the final partial console line on normal exit.
+pub fn flush_cdc_pending_output() {
+    OTG_FS_SHARED.with(|shared| {
+        let mut s = shared.borrow_mut();
+        if s.cdc_line_buf.is_empty() {
+            return;
+        }
+
+        let line = String::from_utf8_lossy(&s.cdc_line_buf).trim().to_string();
+        if !line.is_empty() {
+            if crate::console_only() {
+                let _ = writeln!(io::stdout(), "{}", line);
+                let _ = io::stdout().flush();
+            } else {
+                info!("USB-CDC ep1 '{}'", line);
+            }
+        }
+
+        s.cdc_line_buf.clear();
     })
 }

@@ -148,6 +148,13 @@ patches:
   - start: 0x1FFF7A10
     data: [0x42, 0x43, 0x31, 0x58, 0x99, 0x10, 0x7A, 0x2C, 0xE1, 0x55, 0xAA, 0x6D]
   # Generate these with ./asm.py
+  # Skip redundant 2nd CRC-verification SPI transfer in AP_RAMTRON::read().
+  # Each 128-byte block is read twice and CRCs compared to detect SPI corruption.
+  # In emulation data is deterministic; crc2 over the unchanged buf == crc1 always.
+  # Replace the second blx sl with `movs r0,#1` so control-flow still sees
+  # transfer-success without paying the second DMA setup cost.
+  - start: 0x08138CA6
+    data: [0x01, 0x20]  # Thumb MOVS r0,#1: was blx sl (second CRC read in AP_RAMTRON::read)
   # NOP a delay_us()
   - start: 0x08051e98
     data: [0x70, 0x47]
@@ -168,6 +175,17 @@ patches:
   # Called on every sdcConnect attempt (3x per sdcard_init call, ~1000x total during SD init).
   - start: 0x08155ef8
     data: [0x70, 0x47, 0x00, 0xbf]
+
+  # Skip Storage::_save_backup mount retry delay loop.
+  # At 0x080f2b58, change `cbnz r0, +0x18` to unconditional `b.n +0x16`
+  # so we do not spin for up to 1000ms in delay(1) before continuing boot.
+  - start: 0x080f2b58
+    data: [0x0B, 0xE0]
+
+  # Make AP_Filesystem_FATFS::retry_mount return true immediately.
+  # This avoids expensive sdcard_init/sdcConnect retries during storage backup.
+  - start: 0x080c25e8
+    data: [0x01, 0x20, 0x70, 0x47]
 
   # Nop the fpga not being there
   #- start: 0x08041F92

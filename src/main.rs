@@ -9,7 +9,7 @@ mod ext_devices;
 mod system;
 mod framebuffers;
 
-use std::io::prelude::*;
+use std::io::{self, prelude::*};
 use std::sync::atomic::Ordering::Relaxed;
 use clap::Parser;
 use anyhow::{Result, Context};
@@ -111,12 +111,22 @@ fn init_logging(args: &Args) {
         }
     };
 
+    struct FlushWriter(io::Stdout);
+    impl io::Write for FlushWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let n = self.0.write(buf)?;
+            self.0.flush()?;
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> { self.0.flush() }
+    }
+
     static mut LAST_NUM_INSTRUCTIONS: u64 = 0;
 
     env_logger::Builder::new()
         .filter_level(lf)
         .write_style(args.color.into())
-        .target(env_logger::Target::Stdout)
+        .target(env_logger::Target::Pipe(Box::new(FlushWriter(io::stdout()))))
         .format(|buf, record| {
             use env_logger::fmt::Color;
             let num_instructions = emulator::NUM_INSTRUCTIONS.load(Relaxed);

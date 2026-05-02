@@ -15,6 +15,17 @@ use super::ExtDevice;
 
 const RAMTRON_SIZE: usize = 32 * 1024;
 
+// AP_Param EEPROM header: magic=[0x50,0x41]('P','A'), revision=6, spare=0.
+// Sentinel Param_header (32-bit LE bitfield): key_low[7:0]=0xFF, type[4:0]=0x1F,
+// key_high=1, group_element[17:0]=0xFF → 0x003FFFFF.
+// Pre-populating the first 8 bytes lets firmware find a valid header+sentinel
+// on the very first 128-byte DMA read, cutting storage-init from 44+ SPI DMA
+// round-trips down to 2 (one block read twice for CRC) — a ~22× speedup.
+const APARAM_INIT: &[u8] = &[
+    0x50, 0x41, 0x06, 0x00, // EEPROM_header: magic 'P','A', revision=6, spare=0
+    0xFF, 0xFF, 0x3F, 0x00, // Sentinel Param_header = 0x003FFFFF
+];
+
 // Cypress FM25V02 RDID response: manufacturer[7] + id1 + id2
 // Matches ArduPilot SITL FM25V02: fill_rdid copies manufacturer bytes, then id1 at [7], id2 at [8]
 const RDID_RESPONSE: [u8; 9] = [0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0xC2, 0x22, 0x00];
@@ -23,6 +34,10 @@ const RDID_RESPONSE: [u8; 9] = [0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0xC2, 0x22, 
 pub struct RamtronConfig {
     pub peripheral: String,
     pub cs_pin: String,
+    /// Optional path to a binary file to pre-load into FRAM storage.
+    /// If absent, storage is initialised with a valid AP_Param header+sentinel
+    /// so firmware skips the full 16KB erase-all scan on first boot.
+    pub file: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug)]
@@ -51,10 +66,22 @@ pub struct Ramtron {
 
 impl Ramtron {
     pub fn new(config: RamtronConfig) -> Result<Self> {
+        let mut storage = vec![0u8; RAMTRON_SIZE];
+        if let Some(ref path) = config.file {
+            let data = std::fs::read(path)
+                .map_err(|e| anyhow::anyhow!("RAMTRON: failed to read {:?}: {}", path, e))?;
+            let len = data.len().min(RAMTRON_SIZE);
+            storage[..len].copy_from_slice(&data[..len]);
+            info!("RAMTRON: loaded {}B from {:?}", len, path);
+        } else {
+            // Pre-populate with valid AP_Param header+sentinel so firmware finds
+            // valid storage immediately and skips the full 16KB erase+scan on boot.
+            storage[..APARAM_INIT.len()].copy_from_slice(APARAM_INIT);
+        }
         Ok(Self {
             config,
             name: String::new(),
-            storage: vec![0; RAMTRON_SIZE],
+            storage,
             state: State::Idle,
             write_enabled: false,
             cs_active: true,  // CS starts high (inactive)

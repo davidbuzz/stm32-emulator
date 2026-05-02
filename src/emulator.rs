@@ -809,6 +809,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             c - NUM_INSTRUCTIONS.load(Ordering::Relaxed)
         );
         if max_instructions == Some(0) {
+            crate::peripherals::otg_fs::flush_cdc_pending_output();
             info!("Reached target number of instructions. Done");
             break;
         }
@@ -851,6 +852,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         }
 
         if STOP_REQUESTED.load(Ordering::Relaxed) {
+            crate::peripherals::otg_fs::flush_cdc_pending_output();
             info!("Stop requested");
             break;
         }

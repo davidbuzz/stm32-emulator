@@ -106,7 +106,9 @@ impl Dma {
 
     fn signal_tc(&mut self, sys: &System, stream_idx: usize) {
         self.set_tcif(stream_idx);
-        if self.streams[stream_idx].tcie_enabled() {
+        let peri_desc = sys.p.addr_desc(self.streams[stream_idx].par);
+        let force_spi_tc_irq = peri_desc.contains("peri=SPI") && peri_desc.contains("reg=DR");
+        if self.streams[stream_idx].tcie_enabled() || force_spi_tc_irq {
             if let Some(irq) = self.stream_irq(stream_idx) {
                 sys.p.nvic.borrow_mut().set_intr_pending(irq);
             }

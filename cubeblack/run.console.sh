@@ -8,6 +8,7 @@ EMULATOR="$ROOT_DIR/target/release/stm32-emulator"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
+# Truncate previous log and run in the foreground so Ctrl-C stops emulation immediately.
 : >"$LOG_FILE"
 
 if [[ ! -x "$EMULATOR" ]]; then
@@ -16,7 +17,7 @@ if [[ ! -x "$EMULATOR" ]]; then
 fi
 
 if command -v stdbuf >/dev/null 2>&1; then
-	stdbuf -oL -eL "$EMULATOR" "$ROOT_DIR/cubeblack/config.yaml" -v --max-instructions 19000000 2>&1 | tee "$LOG_FILE"
+	stdbuf -oL -eL "$EMULATOR" --console-only "$ROOT_DIR/cubeblack/config.yaml" --max-instructions 120000000 2>&1 | tee "$LOG_FILE"
 else
-	"$EMULATOR" "$ROOT_DIR/cubeblack/config.yaml" -v --max-instructions 19000000 2>&1 | tee "$LOG_FILE"
+	"$EMULATOR" --console-only "$ROOT_DIR/cubeblack/config.yaml" --max-instructions 120000000 2>&1 | tee "$LOG_FILE"
 fi
