@@ -9,14 +9,16 @@
 // Still incomplete: exact decrement timing, calibration semantics, and all CTRL side effects.
 // Datasheet/reference anchor: ARMv7-M SysTick architecture as used by STM32F427.
 
-use crate::system::System;
+use crate::{emulator::NUM_INSTRUCTIONS, system::System};
 use super::Peripheral;
 
 #[derive(Default)]
 pub struct SysTick {
     ctl: u32,
     reload: u32,
-    val_toggle: bool,
+    current: u32,
+    countflag: bool,
+    last_clk: u64,
 }
 
 impl SysTick {
@@ -28,13 +30,46 @@ impl SysTick {
         }
     }
 
-    fn has_int_enabled(&self) -> bool {
-        (self.ctl & 0b11) == 0b11
+    fn enabled(&self) -> bool {
+        (self.ctl & 1) != 0
+    }
+
+    fn tickint_enabled(&self) -> bool {
+        (self.ctl & (1 << 1)) != 0
+    }
+
+    fn reload_value(&self) -> u32 {
+        self.reload & 0x00ff_ffff
+    }
+
+    fn current_value(&self) -> u32 {
+        self.current & 0x00ff_ffff
+    }
+
+    fn update_counter(&mut self) {
+        let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+        let mut delta = now.saturating_sub(self.last_clk);
+        self.last_clk = now;
+
+        if !self.enabled() {
+            return;
+        }
+
+        let reload = self.reload_value();
+        while delta > 0 {
+            if self.current == 0 {
+                self.current = reload;
+                self.countflag = true;
+            } else {
+                self.current = self.current.saturating_sub(1);
+            }
+            delta -= 1;
+        }
     }
 
     fn set_nvic_systick_period(&self, sys: &System) {
-        let nvic_systick_period = if self.has_int_enabled() {
-            Some(self.reload)
+        let nvic_systick_period = if self.enabled() && self.tickint_enabled() {
+            Some(self.reload_value().saturating_add(1))
         } else {
             None
         };
@@ -51,34 +86,49 @@ impl SysTick {
 
 impl Peripheral for SysTick {
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
+        self.update_counter();
+
         match offset {
             0x0000 => {
-                self.val_toggle = !self.val_toggle;
-                // toggle the count bit
-                self.ctl | if self.val_toggle { 0 } else { 1 << 16 }
+                let mut ctrl = self.ctl & 0x0001_0007;
+                if self.countflag {
+                    ctrl |= 1 << 16;
+                }
+                // COUNTFLAG is cleared on CTRL read.
+                self.countflag = false;
+                ctrl
             }
-            0x0004 => self.reload,
-            0x0008 => {
-                self.val_toggle = !self.val_toggle;
-                if self.val_toggle { 0 } else { self.reload/2 }
-            }
+            0x0004 => self.reload_value(),
+            0x0008 => self.current_value(),
+            // CALIB: no reference clock modeled (NOREF=1), calibration value unknown.
+            0x000c => 1 << 31,
             _ => 0
         }
     }
 
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
+        self.update_counter();
+
         match offset {
             0x0000 => {
                 // CTRL register
                 trace!("SysTick write CTRL=0x{:08x}", value);
-                self.ctl = value;
+                self.ctl = value & 0x0001_0007;
+                if self.enabled() && self.current == 0 {
+                    self.current = self.reload_value();
+                }
                 self.set_nvic_systick_period(sys);
             }
             0x0004 => {
                 // LOAD register
                 trace!("SysTick write LOAD=0x{:08x}", value);
-                self.reload = value;
+                self.reload = value & 0x00ff_ffff;
                 self.set_nvic_systick_period(sys);
+            }
+            0x0008 => {
+                // Writing VAL clears the current count and COUNTFLAG.
+                self.current = 0;
+                self.countflag = false;
             }
             _ => {}
         }

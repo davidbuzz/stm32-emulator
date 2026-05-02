@@ -53,6 +53,11 @@ pub struct Tim {
     smcr_sms: u8,
     /// SMCR trigger selection: TS bits 6:4 extracted  
     smcr_ts: u8,
+    center_aligned_up: bool,
+    arr_shadow: u32,
+    psc_shadow: u32,
+    arr_pending: bool,
+    psc_pending: bool,
     last_clk: u64,
     psc_accum: u64,
 }
@@ -64,6 +69,8 @@ impl Tim {
             Some(Box::new(Self {
                 name: name.to_string(),
                 arr: u32::MAX,
+                arr_shadow: u32::MAX,
+                center_aligned_up: true,
                 update_irq,
                 cc_irq,
                 ..Self::default()
@@ -109,6 +116,68 @@ impl Tim {
         self.cc_irq
     }
 
+    fn counter_mask(&self) -> u32 {
+        match self.name.as_str() {
+            "TIM2" | "TIM5" => u32::MAX,
+            _ => 0x0000_ffff,
+        }
+    }
+
+    fn apply_width(&self, value: u32) -> u32 {
+        value & self.counter_mask()
+    }
+
+    fn is_advanced_timer(&self) -> bool {
+        self.name == "TIM1" || self.name == "TIM8"
+    }
+
+    fn udis(&self) -> bool {
+        (self.cr1 & (1 << 1)) != 0
+    }
+
+    fn urs(&self) -> bool {
+        (self.cr1 & (1 << 2)) != 0
+    }
+
+    fn update_register_preloads(&mut self) {
+        if self.arr_pending {
+            self.arr = self.apply_width(self.arr_shadow);
+            self.arr_pending = false;
+        }
+        if self.psc_pending {
+            self.psc = self.apply_width(self.psc_shadow);
+            self.psc_pending = false;
+        }
+    }
+
+    fn trigger_update_event(&mut self, sys: &System, from_counter_overflow: bool) {
+        if !from_counter_overflow && self.urs() {
+            return;
+        }
+        if self.udis() {
+            return;
+        }
+
+        if self.is_advanced_timer() {
+            self.rcr_count = self.rcr_count.saturating_add(1);
+            if self.rcr_count < self.rcr.saturating_add(1) {
+                return;
+            }
+            self.rcr_count = 0;
+        }
+
+        self.update_register_preloads();
+        self.sr |= 1;
+        if (self.dier & 1) != 0 {
+            if let Some(irq) = self.irq_number() {
+                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+            }
+        }
+        if (self.dier & (1 << 8)) != 0 {
+            self.trigger_update_dma_request(sys);
+        }
+    }
+
     fn tick(&mut self, sys: &System) {
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         let delta = now.saturating_sub(self.last_clk) as u32;
@@ -133,23 +202,39 @@ impl Tim {
             return;
         }
 
+        let width_mask = self.counter_mask();
+        let arr = self.arr.max(1) & width_mask;
         let old_cnt = self.cnt;
         
         // Determine counting direction based on DIR bit (CR1[4]) and CMS mode (CR1[6:5])
         // For edge-aligned mode (CMS=00): up if DIR=0, down if DIR=1
         // For center-aligned modes: counter alternates direction
-        let is_downcounting = self.cms == 0 && !self.direction_up;
+        let is_downcounting = if self.cms == 0 {
+            !self.direction_up
+        } else {
+            !self.center_aligned_up
+        };
         
         if is_downcounting {
             // Down-counting mode: decrement counter
-            self.cnt = self.cnt.saturating_sub(ticks);
+            self.cnt = self.cnt.saturating_sub(ticks) & width_mask;
         } else if self.cms == 0 {
             // Edge-aligned up-counting mode (default)
-            self.cnt = self.cnt.wrapping_add(ticks);
+            self.cnt = self.cnt.wrapping_add(ticks) & width_mask;
         } else if self.cms == 1 || self.cms == 2 {
-            // Center-aligned mode: counter increments then decrements (simplified single direction per tick)
-            // For now, just count up; real hardware maintains DIR flag state
-            self.cnt = self.cnt.wrapping_add(ticks);
+            // Center-aligned mode: emulate a coarse up/down reversal around ARR/0.
+            if self.center_aligned_up {
+                self.cnt = self.cnt.wrapping_add(ticks) & width_mask;
+                if self.cnt >= arr {
+                    self.cnt = arr;
+                    self.center_aligned_up = false;
+                }
+            } else {
+                self.cnt = self.cnt.saturating_sub(ticks) & width_mask;
+                if self.cnt == 0 {
+                    self.center_aligned_up = true;
+                }
+            }
         } else {
             // CMS=3 is reserved
             return;
@@ -221,60 +306,32 @@ impl Tim {
         }
 
         // Check for overflow/underflow condition
-        let overflow = if is_downcounting {
+        let overflow = if self.cms == 0 && is_downcounting {
             old_cnt > 0 && self.cnt == 0  // Counter underflowed to 0
+        } else if self.cms == 0 {
+            self.cnt >= arr  // Counter overflowed past ARR
         } else {
-            self.cnt >= self.arr  // Counter overflowed past ARR
+            // In center-aligned mode, update happens at both limits.
+            self.cnt == 0 || self.cnt == arr
         };
 
         if overflow {
-            // RCR (Repetition Counter) for advanced timers: delay update until RCR+1 overflows
-            if self.name == "TIM1" || self.name == "TIM8" {
-                self.rcr_count = self.rcr_count.saturating_add(1);
-                if self.rcr_count >= self.rcr {
-                    self.rcr_count = 0;
-                    // Fire update event on this overflow
-                    self.sr |= 1;
-                    if is_downcounting {
-                        self.cnt = self.arr;
-                    } else {
-                        self.cnt = 0;
-                    }
-                    if (self.dier & 1) != 0 {
-                        if let Some(irq) = self.irq_number() {
-                            sys.p.nvic.borrow_mut().set_intr_pending(irq);
-                        }
-                    }
-                    // Update DMA request (DIER bit 8)
-                    if (self.dier & (1 << 8)) != 0 {
-                        self.trigger_update_dma_request(sys);
-                    }
-                } else {
-                    // Not time for update event yet; just reload counter without firing interrupt
-                    if is_downcounting {
-                        self.cnt = self.arr;
-                    } else {
-                        self.cnt = 0;
-                    }
-                }
-            } else {
-                // General-purpose timers: immediate update (no RCR)
-                self.sr |= 1;
+            if self.cms == 0 {
                 if is_downcounting {
-                    self.cnt = self.arr;
+                    self.cnt = arr;
                 } else {
                     self.cnt = 0;
                 }
-                if (self.dier & 1) != 0 {
-                    if let Some(irq) = self.irq_number() {
-                        sys.p.nvic.borrow_mut().set_intr_pending(irq);
-                    }
-                }
-                // Update DMA request (DIER bit 8)
-                if (self.dier & (1 << 8)) != 0 {
-                    self.trigger_update_dma_request(sys);
+            } else {
+                // Center-aligned update point keeps counter at edge and flips direction.
+                if self.cnt == arr {
+                    self.center_aligned_up = false;
+                } else if self.cnt == 0 {
+                    self.center_aligned_up = true;
                 }
             }
+
+            self.trigger_update_event(sys, true);
         }
     }
 
@@ -310,9 +367,9 @@ impl Peripheral for Tim {
             0x0018 => self.ccmr1,
             0x001c => self.ccmr2,
             0x0020 => self.ccer,
-            0x0024 => self.cnt,
-            0x0028 => self.psc,
-            0x002c => self.arr,
+            0x0024 => self.apply_width(self.cnt),
+            0x0028 => self.apply_width(self.psc),
+            0x002c => self.apply_width(self.arr),
             0x0030 => {
                 // RCR (1xH): Repetition Counter for TIM1 TIM8 only
                 // Firmware reads to check remaining repetitions before update
@@ -349,6 +406,9 @@ impl Peripheral for Tim {
                 self.arpe = (value >> 7) & 1 != 0;  // CR1 bit 7: ARPE
                 self.cms = ((value >> 5) & 0x3) as u8;  // CR1[6:5]: CMS
                 self.direction_up = (value >> 4) & 1 == 0;  // CR1 bit 4: DIR (0=up, 1=down)
+                if self.cms != 0 {
+                    self.center_aligned_up = true;
+                }
             }
             0x0004 => self.cr2 = value,
             0x0008 => {
@@ -368,13 +428,7 @@ impl Peripheral for Tim {
             0x0014 => { // EGR
                 // EGR (Event Generation Register): writing bit 0 forces an update event.
                 if value & 1 != 0 {
-                    self.sr |= 1; // set UIF
-                    if (self.dier & 1) != 0 {
-                        if let Some(irq) = self.irq_number() {
-                            debug!("{} EGR UG -> update event -> IRQ {}", self.name, irq);
-                            sys.p.nvic.borrow_mut().set_intr_pending(irq);
-                        }
-                    }
+                    self.trigger_update_event(sys, false);
                 }
                 // CC event generation: bits 1-4 set corresponding CCxIF and fire CC IRQ.
                 for cc in 1u32..=4 {
@@ -415,67 +469,53 @@ impl Peripheral for Tim {
             0x0020 => self.ccer = value,
             0x0024 => {
                 debug!("{} write CNT=0x{:08x}", self.name, value);
-                self.cnt = value;
+                self.cnt = self.apply_width(value);
             }
             0x0028 => {
                 debug!("{} write PSC=0x{:08x}", self.name, value);
-                self.psc = value;
+                self.psc_shadow = self.apply_width(value);
+                self.psc_pending = true;
             }
             0x002c => {
                 debug!("{} write ARR=0x{:08x}", self.name, value);
-                self.arr = value;
+                let arr = self.apply_width(value);
+                self.arr_shadow = arr;
+                if self.arpe {
+                    self.arr_pending = true;
+                } else {
+                    self.arr = arr;
+                    self.arr_pending = false;
+                }
             }
             0x0030 => {
                 // RCR (1xH): Repetition Counter for TIM1 TIM8
                 if self.name == "TIM1" || self.name == "TIM8" {
-                    self.rcr = value as u32;
+                    self.rcr = value & 0xff;
                     self.rcr_count = 0;
                     debug!("{} write RCR=0x{:08x}", self.name, value);
                 }
             }
             0x0034 => {
                 debug!("{} write CCR1=0x{:08x}", self.name, value);
-                self.ccr1 = value;
+                self.ccr1 = self.apply_width(value);
             }
             0x0038 => {
                 debug!("{} write CCR2=0x{:08x}", self.name, value);
-                self.ccr2 = value;
+                self.ccr2 = self.apply_width(value);
             }
             0x003c => {
                 debug!("{} write CCR3=0x{:08x}", self.name, value);
-                self.ccr3 = value;
+                self.ccr3 = self.apply_width(value);
             }
             0x0040 => {
                 debug!("{} write CCR4=0x{:08x}", self.name, value);
-                self.ccr4 = value;
+                self.ccr4 = self.apply_width(value);
             }
             0x0044 => {
                 // BDTR (44H): Break and Dead-Time Register for TIM1 TIM8
                 if self.name == "TIM1" || self.name == "TIM8" {
-                    // Check if MOE bit (bit 15) is transitioning
-                    let old_moe = (self.bdtr >> 15) & 1;
-                    let new_moe = (value >> 15) & 1;
-                    
-                    // If MOE goes from 1 to 0, that could indicate break condition
-                    // (though typically break is triggered by external pin or EGR,
-                    // MOE transitions can also generate break events in some configs)
-                    if old_moe != 0 && new_moe == 0 {
-                        // MOE disabled (1→0 transition)
-                        self.sr |= 1 << 7; // set BIF
-                        self.break_condition = true;
-                        if (self.dier & (1 << 7)) != 0 {
-                            if let Some(irq) = self.irq_number() {
-                                debug!("{} BDTR MOE 1->0 -> break event -> IRQ {}", self.name, irq);
-                                sys.p.nvic.borrow_mut().set_intr_pending(irq);
-                            }
-                        }
-                    } else if old_moe == 0 && new_moe != 0 {
-                        // MOE enabled (0→1 transition) - re-enable pwm outputs
-                        debug!("{} BDTR MOE 0->1 -> outputs re-enabled", self.name);
-                    }
-                    
                     self.bdtr = value;
-                    debug!("{} write BDTR=0x{:08x} (MOE={} BKE={})", 
+                    debug!("{} write BDTR=0x{:08x} (MOE={} BKE={})",
                         self.name, value, 
                         (value >> 15) & 1, (value >> 12) & 1);
                 }

@@ -106,9 +106,7 @@ impl Dma {
 
     fn signal_tc(&mut self, sys: &System, stream_idx: usize) {
         self.set_tcif(stream_idx);
-        let peri_desc = sys.p.addr_desc(self.streams[stream_idx].par);
-        let force_spi_tc_irq = peri_desc.contains("peri=SPI") && peri_desc.contains("reg=DR");
-        if self.streams[stream_idx].tcie_enabled() || force_spi_tc_irq {
+        if self.streams[stream_idx].tcie_enabled() {
             if let Some(irq) = self.stream_irq(stream_idx) {
                 sys.p.nvic.borrow_mut().set_intr_pending(irq);
             }
@@ -175,6 +173,27 @@ impl Dma {
             })
             .collect()
     }
+
+    fn clear_ifcr_bank(reg: &mut u32, base_stream: usize, value: u32) {
+        for local in 0..4 {
+            let stream = base_stream + local;
+            if (value & feif_mask(stream)) != 0 {
+                *reg &= !feif_mask(stream);
+            }
+            if (value & dmeif_mask(stream)) != 0 {
+                *reg &= !dmeif_mask(stream);
+            }
+            if (value & teif_mask(stream)) != 0 {
+                *reg &= !teif_mask(stream);
+            }
+            if (value & htif_mask(stream)) != 0 {
+                *reg &= !htif_mask(stream);
+            }
+            if (value & tcif_mask(stream)) != 0 {
+                *reg &= !tcif_mask(stream);
+            }
+        }
+    }
 }
 
 impl Peripheral for Dma {
@@ -208,10 +227,10 @@ impl Peripheral for Dma {
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
         match Access::from_offset(offset) {
             Access::Reg(Reg::Lifcr) => {
-                self.lisr &= !value;
+                Self::clear_ifcr_bank(&mut self.lisr, 0, value);
             }
             Access::Reg(Reg::Hifcr) => {
-                self.hisr &= !value;
+                Self::clear_ifcr_bank(&mut self.hisr, 4, value);
             }
             Access::Reg(_) => {}
             Access::StreamReg(i, offset) => {
@@ -253,40 +272,16 @@ impl Peripheral for Dma {
                     }
 
                     if !blocking_owners.is_empty() {
-                        let max_owner_pl = blocking_owners
-                            .iter()
-                            .map(|idx| self.streams[*idx].priority())
-                            .max()
-                            .unwrap_or(0);
-
-                        if new_pl > max_owner_pl {
-                            for owner in blocking_owners {
-                                self.streams[owner].cr &= !1;
-                                self.streams[owner].deferred_usart_rx = false;
-                                debug!(
-                                    "{} stream={} preempted stream={} on conflicting request channel={} peri={} (pl {} > {})",
-                                    self.name,
-                                    i,
-                                    owner,
-                                    channel,
-                                    peri_desc,
-                                    new_pl,
-                                    self.streams[owner].priority()
-                                );
-                            }
-                        } else {
-                            self.signal_mode_error(sys, i);
-                            debug!(
-                                "{} stream={} blocked conflicting request channel={} peri={} (pl {} <= max_owner_pl {})",
-                                self.name,
-                                i,
-                                channel,
-                                peri_desc,
-                                new_pl,
-                                max_owner_pl
-                            );
-                            return;
-                        }
+                        self.signal_mode_error(sys, i);
+                        debug!(
+                            "{} stream={} blocked conflicting request channel={} peri={} (pl {})",
+                            self.name,
+                            i,
+                            channel,
+                            peri_desc,
+                            new_pl
+                        );
+                        return;
                     }
                 }
 
@@ -517,7 +512,7 @@ impl Stream {
     /// For M2P (Write): NDTR beats, reading msize bytes from memory (MINC), writing psize
     ///   bytes to peripheral (PINC).
     /// For MemCopy: source and destination both increment by msize per beat.
-    fn do_xfer(&mut self, dma_name: &str, stream_idx: usize, sys: &System) -> bool {
+    fn do_xfer(&mut self, dma_name: &str, stream_idx: usize, sys: &System) -> XferOutcome {
         let dir = self.dir();
         let mut mem_addr = self.data_addr();
         let mut peri_addr = self.par;
@@ -527,7 +522,9 @@ impl Stream {
         let minc = self.minc();
         let pinc = self.pinc();
 
-        if ndtr == 0 { return false; }
+        if ndtr == 0 {
+            return XferOutcome { ok: false, half: false };
+        }
 
         let peri = Peripherals::get_peripheral(&sys.p.peripherals, peri_addr);
         let peri_desc = sys.p.addr_desc(peri_addr);
@@ -542,7 +539,7 @@ impl Stream {
                 peri_desc,
                 dir
             );
-            return false;
+            return XferOutcome { ok: false, half: false };
         }
 
         let mut ok = true;
@@ -560,7 +557,7 @@ impl Stream {
                 dir
             );
             // Signal FEIF but still attempt transfer (RM behavior)
-            return false;
+            return XferOutcome { ok: false, half: false };
         }
 
         if log::log_enabled!(log::Level::Debug) {
@@ -698,6 +695,7 @@ impl Stream {
             }
 
             remaining_beats -= beats;
+            self.ndtr = remaining_beats as u32;
         }
 
         // Update FIFO byte tracking after transfer
@@ -718,7 +716,10 @@ impl Stream {
             }
         }
 
-        ok
+        let half_threshold = self.initial_ndtr / 2;
+        let half = self.initial_ndtr > 1 && self.ndtr <= half_threshold;
+
+        XferOutcome { ok, half }
     }
 
     pub fn read(&mut self, _name: &str, _sys: &System, offset: u32) -> u32 {
@@ -739,10 +740,6 @@ impl Stream {
                 // wait for it to go to 1 and then 0, with a timeout. So they
                 // are consistently hitting the timeout.
                 // We'll do toggles on the ready flag to speed things up avoiding the timeout.
-                if self.dir() == Dir::Write && self.ndtr == 0 {
-                    self.next_cr = Some(self.cr ^ 1)
-                }
-
                 v
             }
             0x0004 => self.ndtr,
@@ -822,7 +819,7 @@ impl Stream {
                 }
                 
                 // HT should fire if initial_ndtr > 1 (multi-beat transfer crosses half-way point)
-                let half = self.initial_ndtr > 1;
+                let half = ok.half;
 
                 if self.is_double_buffer() {
                     // DBM: toggle CT (bit 19) to switch between M0AR and M1AR, reload NDTR
@@ -836,19 +833,42 @@ impl Stream {
                     self.ndtr = 0;
                     self.next_cr = Some(value);
                 }
-                if ok {
+                if ok.ok {
                     return StreamWriteResult::Completed { half };
                 }
                 return StreamWriteResult::TransferError;
             }
             0x0004 => {
+                if (self.cr & 1) != 0 {
+                    return StreamWriteResult::Noop;
+                }
                 self.ndtr = value & 0xFFFF;
                 self.initial_ndtr = self.ndtr;
             }
-            0x0008 => { self.par = value; }
-            0x000c => { self.m0ar = value; }
-            0x0010 => { self.m1ar = value; }
-            0x0014 => { self.fcr = value; }
+            0x0008 => {
+                if (self.cr & 1) != 0 {
+                    return StreamWriteResult::Noop;
+                }
+                self.par = value;
+            }
+            0x000c => {
+                if (self.cr & 1) != 0 {
+                    return StreamWriteResult::Noop;
+                }
+                self.m0ar = value;
+            }
+            0x0010 => {
+                if (self.cr & 1) != 0 {
+                    return StreamWriteResult::Noop;
+                }
+                self.m1ar = value;
+            }
+            0x0014 => {
+                if (self.cr & 1) != 0 {
+                    return StreamWriteResult::Noop;
+                }
+                self.fcr = value;
+            }
             _ => {}
         }
 
@@ -884,7 +904,7 @@ impl Stream {
         // then decide based on circular mode whether to reload or finish.
         let ok = self.do_xfer(dma_name, stream_idx, sys);
         // HT fires if multi-beat transfer (initial_ndtr > 1)
-        let half = self.initial_ndtr > 1;
+        let half = ok.half;
         self.deferred_usart_rx = false;
 
         if self.is_double_buffer() {
@@ -902,12 +922,17 @@ impl Stream {
             self.next_cr = None;
         }
 
-        if ok {
+        if ok.ok {
             StreamStepResult::Completed { half }
         } else {
             StreamStepResult::TransferError
         }
     }
+}
+
+struct XferOutcome {
+    ok: bool,
+    half: bool,
 }
 
 enum StreamWriteResult {
