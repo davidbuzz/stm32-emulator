@@ -258,6 +258,12 @@ impl OtgFsState {
     }
 
     fn maybe_raise_irq(&self, sys: &System) {
+        if (self.gahbcfg & GAHBCFG_GINT) == 0 {
+            return;
+        }
+        if self.masked_interrupts() == 0 {
+            return;
+        }
         sys.p.nvic.borrow_mut().set_intr_pending(OTG_FS_IRQ);
     }
 
@@ -344,7 +350,8 @@ impl OtgFsState {
             return;
         }
 
-        let mut reg = self.doepctl[ep];
+        let old_reg = self.doepctl[ep];
+        let mut reg = old_reg;
         reg = (reg & !(DOEPCTL_EPENA | DOEPCTL_USBAEP | DOEPCTL_NAKSTS))
             | (value & (DOEPCTL_EPENA | DOEPCTL_USBAEP | 0x003F_0000 | 0x7FF));
 
@@ -358,7 +365,7 @@ impl OtgFsState {
         self.doepctl[ep] = reg;
 
         // On EPENA clear, mark endpoint as no longer accepting OUT transfers.
-        if (value & DOEPCTL_EPENA) == 0 && (self.doepctl[ep] & DOEPCTL_EPENA) != 0 {
+        if (old_reg & DOEPCTL_EPENA) != 0 && (reg & DOEPCTL_EPENA) == 0 {
             otg_debug!("DOEPCTL{ep} EPENA cleared (OUT endpoint disabled)");
         }
     }
@@ -488,7 +495,17 @@ impl OtgFsState {
             0x0010 => self.grstctl | GRSTCTL_AHBIDL,
             0x0014 => self.gintsts,
             0x0018 => self.gintmsk,
-            0x001c | 0x0020 => {
+            0x001c => {
+                // GRXSTSR is a status register (no pop side-effect).
+                match self.ep0_rx_state {
+                    Ep0RxState::RxFlvlStatusPending => GRXSTSP_PKTSTS_SETUP_DATA | GRXSTSP_BCNT_8,
+                    Ep0RxState::RxFlvlCompletePending => GRXSTSP_PKTSTS_SETUP_COMPL,
+                    Ep0RxState::OutDataStatusPending => GRXSTSP_PKTSTS_OUT_DATA | GRXSTSP_BCNT_7,
+                    Ep0RxState::OutCompletePending => GRXSTSP_PKTSTS_OUT_COMPL,
+                    _ => self.grxstsr,
+                }
+            }
+            0x0020 => {
                 // GRXSTSP is a pop register; serve the enumeration FIFO state machine.
                 let result = match self.ep0_rx_state {
                     Ep0RxState::RxFlvlStatusPending => {
@@ -581,7 +598,9 @@ impl OtgFsState {
         match offset {
             0x0000 => self.dcfg = value,
             0x0004 => self.dctl = value,
-            0x0008 => self.dsts = value,
+            0x0008 => {
+                // DSTS is read-only status in device mode.
+            }
             0x0010 => self.diepmsk = value,
             0x0014 => self.doepmsk = value,
             0x0018 => self.daint &= !value,

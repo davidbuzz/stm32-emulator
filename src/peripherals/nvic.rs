@@ -24,6 +24,7 @@ pub struct Nvic {
     // 128 different interrupts. Good enough for now
     pending: u128,
     enabled: u128,
+    active_external: u128,
     irq_priority: [u8; 128],
     active_exceptions: u32,
     exc_return_stack: Vec<u32>,
@@ -61,6 +62,7 @@ impl Default for Nvic {
             last_systick_trigger: 0,
             pending: 0,
             enabled: 0,
+            active_external: 0,
             irq_priority: [0; 128],
             active_exceptions: 0,
             exc_return_stack: Vec::new(),
@@ -90,6 +92,15 @@ pub mod irq {
 impl Nvic {
     const FP_EXTENDED_FRAME_RESERVED_WORD: u32 = 0;
 
+    fn irq_to_pending_bit(irq: i32) -> Option<u32> {
+        let bit = IRQ_OFFSET + irq;
+        if (0..128).contains(&bit) {
+            Some(bit as u32)
+        } else {
+            None
+        }
+    }
+
     fn push_word(uc: &mut Unicorn<()>, sp: &mut u64, value: u32) {
         *sp -= 4;
         uc.mem_write(*sp, &value.to_le_bytes())
@@ -106,21 +117,25 @@ impl Nvic {
 
     pub fn set_intr_pending(&mut self, irq: i32) {
         trace!("Set irq pending irq={}", irq);
-        let bit = IRQ_OFFSET + irq;
-        assert!(bit >= 0 && bit < 128);
-        self.pending |= 1u128 << bit;
+        if let Some(bit) = Self::irq_to_pending_bit(irq) {
+            self.pending |= 1u128 << bit;
+        } else {
+            warn!("Ignoring invalid IRQ {} in set_intr_pending", irq);
+        }
     }
 
     pub fn clear_intr_pending(&mut self, irq: i32) {
-        let bit = IRQ_OFFSET + irq;
-        assert!(bit >= 0 && bit < 128);
-        self.pending &= !(1u128 << bit);
+        if let Some(bit) = Self::irq_to_pending_bit(irq) {
+            self.pending &= !(1u128 << bit);
+        }
     }
 
     pub fn is_intr_pending(&self, irq: i32) -> bool {
-        let bit = IRQ_OFFSET + irq;
-        assert!(bit >= 0 && bit < 128);
-        (self.pending & (1u128 << bit)) != 0
+        if let Some(bit) = Self::irq_to_pending_bit(irq) {
+            (self.pending & (1u128 << bit)) != 0
+        } else {
+            false
+        }
     }
 
     pub fn next_pending_intr(&self) -> Option<i32> {
@@ -263,7 +278,7 @@ impl Nvic {
         let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap() as u32;
         let current_exception = sys.uc.borrow().reg_read(RegisterARM::IPSR).unwrap();
 
-        if primask_disabled || current_exception != 0 {
+        if primask_disabled {
             trace!(
                 "Interrupt dispatch blocked primask={} ipsr={} active_exceptions={} pending=0x{:032x}",
                 sys.uc.borrow().reg_read(RegisterARM::PRIMASK).unwrap(),
@@ -274,16 +289,25 @@ impl Nvic {
             return None;
         }
 
+        let current_active_prio = if current_exception >= IRQ_OFFSET as u64 {
+            let active_irq = (current_exception as i32) - IRQ_OFFSET;
+            Some(self.irq_priority_value(active_irq))
+        } else {
+            None
+        };
+
         // Keep existing simple system-exception behavior in thread mode.
-        let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
-        let sys_pending = self.pending & sys_pending_mask;
-        if sys_pending != 0 {
-            let bit = sys_pending.trailing_zeros();
-            self.pending &= !(1u128 << bit);
-            return Some((bit as i32) - IRQ_OFFSET);
+        if current_exception == 0 {
+            let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
+            let sys_pending = self.pending & sys_pending_mask;
+            if sys_pending != 0 {
+                let bit = sys_pending.trailing_zeros();
+                self.pending &= !(1u128 << bit);
+                return Some((bit as i32) - IRQ_OFFSET);
+            }
         }
 
-        if let Some(irq) = self.take_next_external_irq(basepri, None) {
+        if let Some(irq) = self.take_next_external_irq(basepri, current_active_prio) {
             return Some(irq);
         }
 
@@ -394,6 +418,9 @@ impl Nvic {
         self.exc_return_stack.push(lr);
         self.exc_stack_state.push((entry_msp, irq));
         self.active_exceptions = self.active_exceptions.saturating_add(1);
+        if irq >= 0 && irq < 128 {
+            self.active_external |= 1u128 << (irq as u32);
+        }
     }
 
     pub fn return_from_interrupt(&mut self, sys: &System) {
@@ -453,6 +480,9 @@ impl Nvic {
         }
 
         self.active_exceptions = self.active_exceptions.saturating_sub(1);
+        if entry_irq >= 0 && entry_irq < 128 {
+            self.active_external &= !(1u128 << (entry_irq as u32));
+        }
     }
 
     const CONTEXT_REGS_EXTENDED: [RegisterARM; 17] = [
@@ -552,6 +582,11 @@ impl Peripheral for Nvic {
                 let idx = ((offset - 0x180) / 4) as u32;
                 let ext_pending = self.pending >> IRQ_OFFSET;
                 ((ext_pending >> (idx * 32)) & 0xFFFF_FFFF) as u32
+            }
+            // IABR0..IABR3 active external IRQ bits
+            0x0200..=0x020c => {
+                let idx = ((offset - 0x200) / 4) as u32;
+                ((self.active_external >> (idx * 32)) & 0xFFFF_FFFF) as u32
             }
             // IPR0..IPR31 (4 priorities per register)
             0x0300..=0x037c => {

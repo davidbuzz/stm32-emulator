@@ -24,13 +24,19 @@ const USART_SR_RXNE: u32 = 1 << 5;  // Receive data not empty
 const USART_SR_TC: u32 = 1 << 6;    // Transmission complete
 const USART_SR_TXE: u32 = 1 << 7;   // Transmit data register empty
 const USART_SR_IDLE: u32 = 1 << 4;  // Idle line detected
+const USART_SR_ORE: u32 = 1 << 3;   // Overrun error
+const USART_SR_NE: u32 = 1 << 2;    // Noise error
+const USART_SR_FE: u32 = 1 << 1;    // Framing error
+const USART_SR_PE: u32 = 1 << 0;    // Parity error
 const USART_CR3_DMAT: u32 = 1 << 6;  // Transmit DMA enable
 const USART_CR3_DMAR: u32 = 1 << 5;  // Receive DMA enable
+const USART_CR3_EIE: u32 = 1 << 0;   // Error interrupt enable
 const USART_CR1_UE: u32 = 1 << 13;   // USART enable
 const USART_CR1_TE: u32 = 1 << 3;    // Transmitter enable
 const USART_CR1_RE: u32 = 1 << 2;    // Receiver enable
 const USART_CR1_M: u32 = 1 << 12;    // Word length (0=8 data bits, 1=9 data bits)
 const USART_CR1_PCE: u32 = 1 << 10;  // Parity control enable
+const USART_CR1_PEIE: u32 = 1 << 8;  // PE interrupt enable
 const USART_CR1_TXEIE: u32 = 1 << 7; // TXE interrupt enable
 const USART_CR1_TCIE: u32 = 1 << 6;  // TC interrupt enable
 const USART_CR1_RXNEIE: u32 = 1 << 5;// RXNE interrupt enable
@@ -53,6 +59,7 @@ pub struct Usart {
     
     // TX state machine: track when DR was written to trigger TXE/TC transitions
     tx_active_since: Option<u64>,
+    sr_read_since_last_dr_read: bool,
     irq: i32,
 }
 
@@ -121,14 +128,7 @@ impl Usart {
                 // TX completion delay expired: set both TXE and TC
                 self.sr |= USART_SR_TXE | USART_SR_TC;
                 self.tx_active_since = None;
-                // Signal interrupts if enabled
-                if self.irq >= 0 && (self.cr1 & USART_CR1_UE) != 0 {
-                    let txeie = (self.cr1 & USART_CR1_TXEIE) != 0;
-                    let tcie  = (self.cr1 & USART_CR1_TCIE) != 0;
-                    if txeie || tcie {
-                        sys.p.nvic.borrow_mut().set_intr_pending(self.irq);
-                    }
-                }
+                self.maybe_raise_irq(sys);
             }
         }
     }
@@ -147,6 +147,28 @@ impl Usart {
             (1u32 << payload_bits) - 1
         }
     }
+
+    fn maybe_raise_irq(&self, sys: &System) {
+        if self.irq < 0 || (self.cr1 & USART_CR1_UE) == 0 {
+            return;
+        }
+
+        let txe = (self.sr & USART_SR_TXE) != 0;
+        let tc = (self.sr & USART_SR_TC) != 0;
+        let rxne = (self.sr & USART_SR_RXNE) != 0;
+        let pe = (self.sr & USART_SR_PE) != 0;
+        let err = (self.sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE)) != 0;
+
+        let txeie = (self.cr1 & USART_CR1_TXEIE) != 0;
+        let tcie = (self.cr1 & USART_CR1_TCIE) != 0;
+        let rxneie = (self.cr1 & USART_CR1_RXNEIE) != 0;
+        let peie = (self.cr1 & USART_CR1_PEIE) != 0;
+        let eie = (self.cr3 & USART_CR3_EIE) != 0;
+
+        if (txe && txeie) || (tc && tcie) || (rxne && rxneie) || (pe && peie) || (err && eie) {
+            sys.p.nvic.borrow_mut().set_intr_pending(self.irq);
+        }
+    }
 }
 
 impl Peripheral for Usart {
@@ -157,7 +179,10 @@ impl Peripheral for Usart {
         }
 
         match offset {
-            0x0000 => self.sr,
+            0x0000 => {
+                self.sr_read_since_last_dr_read = true;
+                self.sr
+            }
             0x0004 => {
                 // DR register: reading clears RXNE and IDLE
                 let v = self.ext_device.as_ref()
@@ -165,7 +190,11 @@ impl Peripheral for Usart {
                     .unwrap_or(self.dr as u8) as u32;
 
                 self.dr = v;
-                self.sr &= !(USART_SR_RXNE | USART_SR_IDLE); // clear RXNE and IDLE after read
+                if self.sr_read_since_last_dr_read {
+                    // RM-style SR->DR sequence clears receive and line-status flags.
+                    self.sr &= !(USART_SR_RXNE | USART_SR_IDLE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                }
+                self.sr_read_since_last_dr_read = false;
 
                 trace!("{} read={:02x}", self.name, v);
                 v
@@ -189,15 +218,11 @@ impl Peripheral for Usart {
             0x0000 => {
                 // SR write: per RM, TC can be cleared by writing 0 to bit 6.
                 // TXE is HW-only (set by hardware after DR is shifted out), cannot be forced.
-                // RXNE is cleared by reading DR; firmware should not write it.
-                // Only allow TC clear via explicit 0-write to that bit.
+                // RXNE/IDLE/error classes are handled by SR->DR read sequencing.
                 if (value & USART_SR_TC) == 0 {
                     self.sr &= !USART_SR_TC;
                 }
-                // Allow firmware to clear RXNE via SR write (some ChibiOS patterns do this)
-                if (value & USART_SR_RXNE) == 0 {
-                    self.sr &= !USART_SR_RXNE;
-                }
+                self.maybe_raise_irq(sys);
             }
             0x0004 => {
                 // DR register write: indicates TX data write
@@ -220,20 +245,15 @@ impl Peripheral for Usart {
 
                 trace!("{} write={:02x}", self.name, self.dr as u8);
             }
-            0x0008 => self.brr = value,
+            0x0008 => self.brr = value & 0x0000_ffff,
             0x000c => {
+                let old_ue = (self.cr1 & USART_CR1_UE) != 0;
                 self.cr1 = value;
-                if self.irq >= 0 && (self.cr1 & USART_CR1_UE) != 0 {
-                    let txe = (self.sr & USART_SR_TXE) != 0;
-                    let tc = (self.sr & USART_SR_TC) != 0;
-                    let rxne = (self.sr & USART_SR_RXNE) != 0;
-                    let txeie = (self.cr1 & USART_CR1_TXEIE) != 0;
-                    let tcie = (self.cr1 & USART_CR1_TCIE) != 0;
-                    let rxneie = (self.cr1 & USART_CR1_RXNEIE) != 0;
-                    if (txe && txeie) || (tc && tcie) || (rxne && rxneie) {
-                        sys.p.nvic.borrow_mut().set_intr_pending(self.irq);
-                    }
+                let new_ue = (self.cr1 & USART_CR1_UE) != 0;
+                if old_ue && !new_ue {
+                    self.tx_active_since = None;
                 }
+                self.maybe_raise_irq(sys);
             }
             0x0010 => {
                 // Persist full CR2 state, but keep only defined stop-bit field in behavior.
@@ -242,6 +262,7 @@ impl Peripheral for Usart {
             0x0014 => {
                 // Persist CR3 state; DMAT/DMAR are consumed in DMA hooks.
                 self.cr3 = value;
+                self.maybe_raise_irq(sys);
             }
             0x0018 => self.gtpr = value,
             _ => {}
@@ -264,6 +285,7 @@ impl Peripheral for Usart {
             }
 
             self.sr &= !USART_SR_RXNE;
+            self.sr_read_since_last_dr_read = false;
         }
 
         // For non-DR offsets or when DMAR is not enabled, return empty rather than
@@ -284,6 +306,7 @@ impl Peripheral for Usart {
             }
 
             self.sr |= USART_SR_TXE | USART_SR_TC;
+            self.maybe_raise_irq(sys);
             trace!("{} dma_write {} bytes", self.name, value.len());
         } else {
             super::Peripheral::write_dma(self, sys, offset, value);
