@@ -161,6 +161,9 @@ impl Usart {
             return;
         }
 
+        let tx_enabled = (self.cr1 & USART_CR1_TE) != 0;
+        let rx_enabled = (self.cr1 & USART_CR1_RE) != 0;
+
         let txe = (self.sr & USART_SR_TXE) != 0;
         let tc = (self.sr & USART_SR_TC) != 0;
         let rxne = (self.sr & USART_SR_RXNE) != 0;
@@ -173,7 +176,12 @@ impl Usart {
         let peie = (self.cr1 & USART_CR1_PEIE) != 0;
         let eie = (self.cr3 & USART_CR3_EIE) != 0;
 
-        if (txe && txeie) || (tc && tcie) || (rxne && rxneie) || (pe && peie) || (err && eie) {
+        if (tx_enabled && txe && txeie)
+            || (tx_enabled && tc && tcie)
+            || (rx_enabled && rxne && rxneie)
+            || (rx_enabled && pe && peie)
+            || (rx_enabled && err && eie)
+        {
             sys.p.nvic.borrow_mut().set_intr_pending(self.irq);
         }
     }
