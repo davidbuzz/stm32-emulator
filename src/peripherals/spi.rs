@@ -21,6 +21,7 @@ const SPI_CR1_CPHA: u32 = 1 << 0;
 const SPI_CR1_MSTR: u32 = 1 << 2;
 const SPI_CR1_SPE: u32 = 1 << 6;
 const SPI_CR1_SSM: u32 = 1 << 9;
+const SPI_CR1_CRCEN: u32 = 1 << 13;
 
 const SPI_CR2_RXDMAEN: u32 = 1 << 0;
 const SPI_CR2_TXDMAEN: u32 = 1 << 1;
@@ -41,6 +42,11 @@ pub struct Spi {
     pub cr1: u32,
     pub cr2: u32,
     pub sr: u32,
+    pub crcpr: u32,
+    pub rxcrcr: u32,
+    pub txcrcr: u32,
+    pub i2scfgr: u32,
+    pub i2spr: u32,
     pub rx_buffer: u32,
     pub rxne: bool,           // RXNE: receive data available
     pub ovr: bool,
@@ -121,6 +127,36 @@ impl Spi {
         sr
     }
 
+    fn crc_enabled(&self) -> bool {
+        (self.cr1 & SPI_CR1_CRCEN) != 0
+    }
+
+    fn crc_poly(&self) -> u16 {
+        let p = (self.crcpr & 0xFFFF) as u16;
+        if p == 0 { 0x0007 } else { p }
+    }
+
+    fn crc_update(mut crc: u16, data: u16, bits: usize, poly: u16) -> u16 {
+        for i in 0..bits {
+            let data_bit = (data >> (bits - 1 - i)) & 1;
+            let crc_bit = (crc >> 15) & 1;
+            crc <<= 1;
+            if (data_bit ^ crc_bit) != 0 {
+                crc ^= poly;
+            }
+        }
+        crc
+    }
+
+    fn update_crc_regs(&mut self, tx_word: u16, rx_word: u16, bits: usize) {
+        if !self.crc_enabled() {
+            return;
+        }
+        let poly = self.crc_poly();
+        self.txcrcr = Self::crc_update(self.txcrcr as u16, tx_word, bits, poly) as u32;
+        self.rxcrcr = Self::crc_update(self.rxcrcr as u16, rx_word, bits, poly) as u32;
+    }
+
     fn maybe_raise_irq(&self, sys: &System) {
         let Some(irq) = self.irq() else {
             return;
@@ -155,7 +191,9 @@ impl Peripheral for Spi {
                 let mut miso = std::collections::VecDeque::new();
                 for _ in 0..size {
                     dev.borrow_mut().write(sys, (), 0xFF);
-                    miso.push_back(dev.borrow_mut().read(sys, ()));
+                    let rx = dev.borrow_mut().read(sys, ());
+                    self.update_crc_regs(0xFF, rx as u16, 8);
+                    miso.push_back(rx);
                 }
                 return miso;
             }
@@ -178,6 +216,7 @@ impl Peripheral for Spi {
             if let Some(d) = &self.ext_device {
                 d.borrow_mut().write(sys, (), v);
             }
+            self.update_crc_regs(v as u16, rx as u16, 8);
             rx
         }).collect();
         if !self.pending_rx_dest.is_empty() {
@@ -232,6 +271,11 @@ impl Peripheral for Spi {
 
                 v
             }
+            0x0010 => self.crcpr,
+            0x0014 => self.rxcrcr,
+            0x0018 => self.txcrcr,
+            0x001C => self.i2scfgr,
+            0x0020 => self.i2spr,
             _ => 0
         }
     }
@@ -240,7 +284,13 @@ impl Peripheral for Spi {
         match offset {
             0x0000 => {
                 // CR1 register
+                let crcen_was = self.crc_enabled();
                 self.cr1 = value;
+                let crcen_now = self.crc_enabled();
+                if !crcen_was && crcen_now {
+                    self.rxcrcr = 0xFFFF;
+                    self.txcrcr = 0xFFFF;
+                }
                 if self.modf && self.modf_sr_read_pending_cr1_clear {
                     // RM sequence: MODF clears on SR read then CR1 write.
                     self.modf = false;
@@ -314,18 +364,29 @@ impl Peripheral for Spi {
                     }
 
                     trace!("{} write={:04x?}", self.name, value as u16);
+                    self.update_crc_regs(value as u16, self.rx_buffer as u16, 16);
                 } else {
                     let v = value as u8;
                     if !tx_first {
                         self.ext_device.as_ref().map(|d| d.borrow_mut().write(sys, (), v));
                     }
                     trace!("{} write={:02x?}", self.name, v);
+                    self.update_crc_regs(v as u16, self.rx_buffer as u16, 8);
                 }
 
                 // After exchange, RX data is available
                 self.rxne = rx_buffer;
                 self.sr &= !SPI_SR_BSY;
                 self.maybe_raise_irq(sys);
+            }
+            0x0010 => {
+                self.crcpr = value & 0xFFFF;
+            }
+            0x001C => {
+                self.i2scfgr = value;
+            }
+            0x0020 => {
+                self.i2spr = value;
             }
             _ => {}
         }
