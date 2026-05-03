@@ -122,8 +122,8 @@
 | DMA LIFCR HIFCR flag-clear positional semantics. | medium | done | IFCR clear now decodes per-stream clear bits and supports CGIFx semantics to clear all stream flags atomically; GIF status bits are tracked and cleared when stream flags are cleared. |
 | DMA HTIF milestone accuracy. | medium | done | HTIF now asserts only when NDTR crosses the half-transfer boundary during a transfer (previous NDTR above threshold, new NDTR at or below threshold), avoiding unconditional HT on every multi-beat completion. |
 | DMA PFCTRL peripheral-flow-controller mode. | low | open | PFCTRL bit in SxCR is stored but peripheral-as-flow-controller semantics and their constraints on NDTR pacing are not implemented. |
-| CRC width-aware DR write path. | low | open | DR write always accumulates 32-bit regardless of access width. RM-defined 8-bit and 16-bit access forms should accumulate the appropriate lane and update IDR accordingly. |
-| CRC CR and IDR masking tightening. | low | open | CR is write-masked to bit 0 only (RESET); IDR is 8-bit. Neither is currently enforced at the register level. |
+| CRC width-aware DR write path. | low | done | Peripheral dispatch now forwards MMIO access size to peripherals; CRC DR consumes true 8/16/32-bit write width instead of value-based heuristics when updating the running CRC. |
+| CRC CR and IDR masking tightening. | low | done | CRC CR writes are masked to RESET bit only and IDR remains 8-bit masked on read/write. |
 | ETH MDIO transaction sequencing. | low | open | MACMIIAR MACMIIDR reads and writes are stored but the MDIO busy-bit handshake sequence and PHY register exchange state machine are not implemented. PHY probing during boot will stall if firmware polls BUSY. |
 | ETH RX TX descriptor engine and packet flow. | low | open | MAC DMA descriptor engine buffer-ownership model RX TX packet filtering and frame interrupt signaling are absent. Ethernet cannot transfer data. |
 | ETH MAC status register W1C semantics. | low | open | Read-only and write-1-clear semantics for MACSR and related status registers are not enforced; writes are stored unfiltered. |

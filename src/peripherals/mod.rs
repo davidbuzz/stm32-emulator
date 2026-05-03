@@ -270,7 +270,7 @@ impl Peripherals {
         let value = if self.core_debug.borrow().handles(addr) {
             self.core_debug.borrow_mut().read(sys, addr)
         } else if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
-            p.peripheral.borrow_mut().read(sys, addr - p.start) << (8*byte_offset)
+            p.peripheral.borrow_mut().read_sized(sys, addr - p.start, size as usize) << (8*byte_offset)
         } else if (0x5000_1000..0x5000_4000).contains(&addr) {
             // OTG FS data FIFO region (EP0-EP3 pop-on-read, 0x1000 bytes per EP).
             otg_fs::fifo_read(((addr - 0x5000_1000) / 0x1000) as usize) << (8*byte_offset)
@@ -310,7 +310,7 @@ impl Peripherals {
         if self.core_debug.borrow().handles(addr) {
             self.core_debug.borrow_mut().write(sys, addr, value);
         } else if let Some(p) = Self::get_peripheral(&self.peripherals, addr) {
-            p.peripheral.borrow_mut().write(sys, addr - p.start, value)
+            p.peripheral.borrow_mut().write_sized(sys, addr - p.start, value, size as usize)
         } else if (0x5000_1000..0x5000_5000).contains(&addr) {
             // OTG FS data FIFO region write (EP0-EP3 TX, 0x1000 bytes per EP).
             // EP1 = CDC bulk IN (console output), EP2 = CDC interrupt IN.
@@ -333,6 +333,14 @@ impl Peripherals {
 pub trait Peripheral {
     fn read(&mut self, sys: &System, offset: u32) -> u32;
     fn write(&mut self, sys: &System, offset: u32, value: u32);
+
+    fn read_sized(&mut self, sys: &System, offset: u32, _size: usize) -> u32 {
+        self.read(sys, offset)
+    }
+
+    fn write_sized(&mut self, sys: &System, offset: u32, value: u32, _size: usize) {
+        self.write(sys, offset, value)
+    }
 
     fn step(&mut self, _sys: &System) {}
 

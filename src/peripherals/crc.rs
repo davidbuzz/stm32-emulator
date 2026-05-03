@@ -71,15 +71,17 @@ impl Peripheral for Crc {
     }
 
     fn write(&mut self, _sys: &System, offset: u32, value: u32) {
+        self.write_sized(_sys, offset, value, 4);
+    }
+
+    fn write_sized(&mut self, _sys: &System, offset: u32, value: u32, size: usize) {
         match offset {
             0x00 => {
-                // Heuristic width handling: many firmware paths use 8/16-bit writes.
-                self.dr = if value <= 0xFF {
-                    Self::update_crc_value(self.dr, value & 0xFF, 8)
-                } else if value <= 0xFFFF {
-                    Self::update_crc_value(self.dr, value & 0xFFFF, 16)
-                } else {
-                    Self::update_crc_word(self.dr, value)
+                // RM0090: DR accepts 8/16/32-bit writes; use actual bus access width.
+                self.dr = match size {
+                    1 => Self::update_crc_value(self.dr, value & 0xFF, 8),
+                    2 => Self::update_crc_value(self.dr, value & 0xFFFF, 16),
+                    _ => Self::update_crc_word(self.dr, value),
                 };
             }
             0x04 => self.idr = value & 0xFF,
