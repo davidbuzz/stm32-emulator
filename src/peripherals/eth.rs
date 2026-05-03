@@ -12,6 +12,11 @@
 use crate::system::System;
 use super::Peripheral;
 
+const ETH_MACMIIAR_MB: u32 = 1 << 0;
+const ETH_MACMIIAR_MW: u32 = 1 << 1;
+const ETH_MACMIIAR_MR_SHIFT: u32 = 6;
+const ETH_MACMIIAR_PA_SHIFT: u32 = 11;
+
 #[derive(Default)]
 pub struct Ethernet {
     /// MACCR (000H): MAC configuration register
@@ -44,11 +49,38 @@ pub struct Ethernet {
     maca0hr: u32,
     /// MACA0LR (044H): MAC address 0 low register
     maca0lr: u32,
+    /// Minimal PHY register backing store for MDIO transactions (PA x MR).
+    phy_regs: [[u16; 32]; 32],
+    /// Remaining cycles until MDIO BUSY clears.
+    mdio_busy_cycles: u8,
 }
 
 impl Ethernet {
     pub fn new(_name: &str) -> Option<Box<dyn Peripheral>> {
         Some(Box::new(Self::default()))
+    }
+}
+
+impl Ethernet {
+    fn start_mdio_transaction(&mut self) {
+        // Model a short BUSY window so firmware polling can observe progress.
+        self.macmiiar |= ETH_MACMIIAR_MB;
+        self.mdio_busy_cycles = 4;
+    }
+
+    fn complete_mdio_transaction(&mut self) {
+        let phy_addr = ((self.macmiiar >> ETH_MACMIIAR_PA_SHIFT) & 0x1F) as usize;
+        let reg_addr = ((self.macmiiar >> ETH_MACMIIAR_MR_SHIFT) & 0x1F) as usize;
+        let write = (self.macmiiar & ETH_MACMIIAR_MW) != 0;
+
+        if write {
+            self.phy_regs[phy_addr][reg_addr] = (self.macmiidr & 0xFFFF) as u16;
+        } else {
+            let val = self.phy_regs[phy_addr][reg_addr] as u32;
+            self.macmiidr = (self.macmiidr & 0xFFFF_0000) | val;
+        }
+
+        self.macmiiar &= !ETH_MACMIIAR_MB;
     }
 }
 
@@ -59,7 +91,13 @@ impl Peripheral for Ethernet {
             0x0004 => self.macffr,
             0x0008 => self.machthr,
             0x000C => self.machtlr,
-            0x0010 => self.macmiiar,
+            0x0010 => {
+                if self.mdio_busy_cycles > 0 {
+                    self.macmiiar | ETH_MACMIIAR_MB
+                } else {
+                    self.macmiiar & !ETH_MACMIIAR_MB
+                }
+            }
             0x0014 => self.macmiidr,
             0x0018 => self.macfcr,
             0x001C => self.macvlantr,
@@ -80,7 +118,13 @@ impl Peripheral for Ethernet {
             0x0004 => self.macffr = value,
             0x0008 => self.machthr = value,
             0x000C => self.machtlr = value,
-            0x0010 => self.macmiiar = value,
+            0x0010 => {
+                // Preserve programmed fields; BUSY bit is driven by MDIO state machine.
+                self.macmiiar = (self.macmiiar & ETH_MACMIIAR_MB) | (value & !ETH_MACMIIAR_MB);
+                if (value & ETH_MACMIIAR_MB) != 0 {
+                    self.start_mdio_transaction();
+                }
+            }
             0x0014 => self.macmiidr = value,
             0x0018 => self.macfcr = value,
             0x001C => self.macvlantr = value,
@@ -99,6 +143,11 @@ impl Peripheral for Ethernet {
     }
 
     fn step(&mut self, _sys: &System) {
-        // No time-based behavior for Ethernet stub
+        if self.mdio_busy_cycles > 0 {
+            self.mdio_busy_cycles -= 1;
+            if self.mdio_busy_cycles == 0 {
+                self.complete_mdio_transaction();
+            }
+        }
     }
 }
