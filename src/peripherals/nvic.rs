@@ -314,23 +314,32 @@ impl Nvic {
         primask != 0
     }
 
+    fn are_faults_disabled(sys: &System) -> bool {
+        let faultmask = sys.uc.borrow().reg_read(RegisterARM::FAULTMASK).unwrap();
+        faultmask != 0
+    }
+
+    fn system_irq_allowed(irq: i32, primask_disabled: bool, faultmask_disabled: bool) -> bool {
+        // FAULTMASK masks all exceptions except NMI.
+        if faultmask_disabled && irq != -14 {
+            return false;
+        }
+
+        // PRIMASK masks configurable exceptions and external IRQs, but not HardFault/NMI.
+        if primask_disabled && irq > -13 {
+            return false;
+        }
+
+        true
+    }
+
     pub fn take_pending_interrupt(&mut self, sys: &System) -> Option<i32> {
         self.maybe_set_systick_intr_pending();
 
         let primask_disabled = Self::are_interrupts_disabled(sys);
+        let faultmask_disabled = Self::are_faults_disabled(sys);
         let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap() as u32;
         let current_exception = sys.uc.borrow().reg_read(RegisterARM::IPSR).unwrap();
-
-        if primask_disabled {
-            trace!(
-                "Interrupt dispatch blocked primask={} ipsr={} active_exceptions={} pending=0x{:032x}",
-                sys.uc.borrow().reg_read(RegisterARM::PRIMASK).unwrap(),
-                current_exception,
-                self.active_exceptions,
-                self.pending
-            );
-            return None;
-        }
 
         let current_active_prio = if current_exception >= IRQ_OFFSET as u64 {
             let active_irq = (current_exception as i32) - IRQ_OFFSET;
@@ -342,12 +351,28 @@ impl Nvic {
         // Keep existing simple system-exception behavior in thread mode.
         if current_exception == 0 {
             let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
-            let sys_pending = self.pending & sys_pending_mask;
-            if sys_pending != 0 {
+            let mut sys_pending = self.pending & sys_pending_mask;
+            while sys_pending != 0 {
                 let bit = sys_pending.trailing_zeros();
-                self.pending &= !(1u128 << bit);
-                return Some((bit as i32) - IRQ_OFFSET);
+                let irq = (bit as i32) - IRQ_OFFSET;
+                if Self::system_irq_allowed(irq, primask_disabled, faultmask_disabled) {
+                    self.pending &= !(1u128 << bit);
+                    return Some(irq);
+                }
+                sys_pending &= !(1u128 << bit);
             }
+        }
+
+        if primask_disabled || faultmask_disabled {
+            trace!(
+                "Interrupt dispatch masked primask={} faultmask={} ipsr={} active_exceptions={} pending=0x{:032x}",
+                sys.uc.borrow().reg_read(RegisterARM::PRIMASK).unwrap(),
+                sys.uc.borrow().reg_read(RegisterARM::FAULTMASK).unwrap(),
+                current_exception,
+                self.active_exceptions,
+                self.pending
+            );
+            return None;
         }
 
         if let Some(irq) = self.take_next_external_irq(basepri, current_active_prio) {
