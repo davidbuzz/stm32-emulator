@@ -28,8 +28,9 @@ const USART_SR_ORE: u32 = 1 << 3;   // Overrun error
 const USART_SR_NE: u32 = 1 << 2;    // Noise error
 const USART_SR_FE: u32 = 1 << 1;    // Framing error
 const USART_SR_PE: u32 = 1 << 0;    // Parity error
-const USART_CR3_DMAT: u32 = 1 << 6;  // Transmit DMA enable
-const USART_CR3_DMAR: u32 = 1 << 5;  // Receive DMA enable
+const USART_CR3_DMAT: u32 = 1 << 7;  // Transmit DMA enable
+const USART_CR3_DMAR: u32 = 1 << 6;  // Receive DMA enable
+const USART_CR3_HDSEL: u32 = 1 << 3; // Half-duplex selection
 const USART_CR3_EIE: u32 = 1 << 0;   // Error interrupt enable
 const USART_CR1_UE: u32 = 1 << 13;   // USART enable
 const USART_CR1_TE: u32 = 1 << 3;    // Transmitter enable
@@ -126,7 +127,18 @@ impl Usart {
     }
 
     fn rx_enabled(&self) -> bool {
-        (self.cr1 & USART_CR1_UE) != 0 && (self.cr1 & USART_CR1_RE) != 0
+        let enabled = (self.cr1 & USART_CR1_UE) != 0 && (self.cr1 & USART_CR1_RE) != 0;
+        if !enabled {
+            return false;
+        }
+
+        // In half-duplex mode, model single-wire directionality: when TX is active,
+        // do not accept RX traffic on the same line.
+        if (self.cr3 & USART_CR3_HDSEL) != 0 && (self.cr1 & USART_CR1_TE) != 0 {
+            return false;
+        }
+
+        true
     }
 
     /// Service TX state machine: transition TXE/TC based on TX timing
@@ -373,6 +385,10 @@ impl Peripheral for Usart {
             0x0014 => {
                 // Persist CR3 state; DMAT/DMAR are consumed in DMA hooks.
                 self.cr3 = value;
+                if !self.rx_enabled() {
+                    self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                    self.rx_dma_pending.clear();
+                }
                 self.maybe_raise_irq(sys);
             }
             0x0018 => self.gtpr = value,
