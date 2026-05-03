@@ -19,6 +19,7 @@ pub struct SysTick {
     current: u32,
     countflag: bool,
     last_clk: u64,
+    clksource_div_remainder: u8,
 }
 
 impl SysTick {
@@ -38,6 +39,10 @@ impl SysTick {
         (self.ctl & (1 << 1)) != 0
     }
 
+    fn clksource_ahb(&self) -> bool {
+        (self.ctl & (1 << 2)) != 0
+    }
+
     fn reload_value(&self) -> u32 {
         self.reload & 0x00ff_ffff
     }
@@ -48,15 +53,20 @@ impl SysTick {
 
     fn update_counter(&mut self) {
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
-        let mut delta = now.saturating_sub(self.last_clk);
+        let delta = now.saturating_sub(self.last_clk);
         self.last_clk = now;
 
         if !self.enabled() {
             return;
         }
 
+        let tick_div: u64 = if self.clksource_ahb() { 1 } else { 8 };
+        let total = delta.saturating_add(self.clksource_div_remainder as u64);
+        let mut ticks = total / tick_div;
+        self.clksource_div_remainder = (total % tick_div) as u8;
+
         let reload = self.reload_value();
-        while delta > 0 {
+        while ticks > 0 {
             if self.current == 0 {
                 self.current = reload;
                 self.countflag = true;
@@ -66,13 +76,15 @@ impl SysTick {
                     self.countflag = true;
                 }
             }
-            delta -= 1;
+            ticks -= 1;
         }
     }
 
     fn set_nvic_systick_period(&self, sys: &System) {
         let nvic_systick_period = if self.enabled() && self.tickint_enabled() {
-            Some(self.reload_value().saturating_add(1))
+            let base = self.reload_value().saturating_add(1);
+            let div = if self.clksource_ahb() { 1 } else { 8 };
+            Some(base.saturating_mul(div))
         } else {
             None
         };
@@ -123,6 +135,9 @@ impl Peripheral for SysTick {
                 self.ctl = value & 0x0001_0007;
                 if self.enabled() && self.current == 0 {
                     self.current = self.reload_value();
+                }
+                if !self.enabled() {
+                    self.clksource_div_remainder = 0;
                 }
                 self.set_nvic_systick_period(sys);
             }
