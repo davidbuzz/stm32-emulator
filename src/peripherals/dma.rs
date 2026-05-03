@@ -286,6 +286,11 @@ impl Peripheral for Dma {
             }
 
             match self.streams[i].step_deferred(&name, i, sys) {
+                StreamStepResult::Progress { half } => {
+                    if half {
+                        self.signal_ht(sys, i);
+                    }
+                }
                 StreamStepResult::Completed { half } => {
                     if half {
                         self.signal_ht(sys, i);
@@ -648,7 +653,7 @@ impl Stream {
     /// For M2P (Write): NDTR beats, reading msize bytes from memory (MINC), writing psize
     ///   bytes to peripheral (PINC).
     /// For MemCopy: source and destination both increment by msize per beat.
-    fn do_xfer(&mut self, dma_name: &str, stream_idx: usize, sys: &System) -> XferOutcome {
+    fn do_xfer(&mut self, dma_name: &str, stream_idx: usize, sys: &System, max_beats: Option<usize>) -> XferOutcome {
         let dir = self.dir();
         let mut mem_addr = self.data_addr();
         let mut peri_addr = self.par;
@@ -704,8 +709,14 @@ impl Stream {
         }
 
         let mut remaining_beats = ndtr;
+        let mut remaining_budget = max_beats.unwrap_or(usize::MAX);
         while remaining_beats > 0 {
+            if remaining_budget == 0 {
+                break;
+            }
+
             let beats = std::cmp::min(remaining_beats, chunk_beats);
+            let beats = std::cmp::min(beats, remaining_budget);
             let peri_total = psize * beats;
             let mem_total = msize * beats;
             let fifo_chunk_bytes = beats * std::cmp::max(psize, msize);
@@ -839,6 +850,7 @@ impl Stream {
             transferred_total_bytes = transferred_total_bytes.saturating_add(beats * std::cmp::max(psize, msize));
 
             remaining_beats -= beats;
+            remaining_budget -= beats;
             self.ndtr = remaining_beats as u32;
         }
 
@@ -959,7 +971,7 @@ impl Stream {
                     return StreamWriteResult::Noop;
                 }
 
-                let ok = self.do_xfer(dma_name, stream_idx, sys);
+                let ok = self.do_xfer(dma_name, stream_idx, sys, None);
                 
                 // If FIFO threshold was violated, signal FE and return error
                 if self.fifo_error_pending {
@@ -1052,9 +1064,22 @@ impl Stream {
 
         // Idle window expired: perform the transfer (reads available bytes from USART ext_device)
         // then decide based on circular mode whether to reload or finish.
-        let ok = self.do_xfer(dma_name, stream_idx, sys);
+        let chunk_beats = self.transfer_beats_per_chunk();
+        let ok = self.do_xfer(dma_name, stream_idx, sys, Some(chunk_beats));
         // HT fires if multi-beat transfer (initial_ndtr > 1)
         let half = ok.half;
+
+        if !ok.ok {
+            self.deferred_usart_rx = false;
+            return StreamStepResult::TransferError;
+        }
+
+        if self.ndtr > 0 {
+            self.deferred_usart_rx = true;
+            self.deferred_since = now;
+            return StreamStepResult::Progress { half };
+        }
+
         self.deferred_usart_rx = false;
 
         if self.is_double_buffer() {
@@ -1072,11 +1097,7 @@ impl Stream {
             self.next_cr = None;
         }
 
-        if ok.ok {
-            StreamStepResult::Completed { half }
-        } else {
-            StreamStepResult::TransferError
-        }
+        StreamStepResult::Completed { half }
     }
 }
 
@@ -1095,6 +1116,7 @@ enum StreamWriteResult {
 
 enum StreamStepResult {
     Noop,
+    Progress { half: bool },
     Completed { half: bool },
     TransferError,
 }
