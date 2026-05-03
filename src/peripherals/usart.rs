@@ -156,6 +156,23 @@ impl Usart {
         }
     }
 
+    fn rx_data_mask(&self) -> u32 {
+        // Mirror RX payload width handling with TX: configured word length with
+        // parity consuming the MSB when enabled.
+        let data_bits: u32 = if (self.cr1 & USART_CR1_M) != 0 { 9 } else { 8 };
+        let payload_bits = if (self.cr1 & USART_CR1_PCE) != 0 {
+            data_bits.saturating_sub(1)
+        } else {
+            data_bits
+        };
+
+        if payload_bits >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << payload_bits) - 1
+        }
+    }
+
     fn service_rx_state(&mut self, sys: &System) {
         if !self.rx_enabled() || (self.cr3 & USART_CR3_DMAR) != 0 {
             return;
@@ -183,7 +200,7 @@ impl Usart {
             return;
         }
 
-        self.dr = byte as u32;
+        self.dr = (byte as u32) & self.rx_data_mask();
         self.sr |= USART_SR_RXNE;
         self.sr &= !USART_SR_IDLE;
         self.maybe_raise_irq(sys);
@@ -248,15 +265,15 @@ impl Peripheral for Usart {
                     .map(|d| d.borrow_mut().read(sys, ()))
                     .unwrap_or(self.dr as u8) as u32;
 
-                self.dr = v;
+                self.dr = v & self.rx_data_mask();
                 if self.sr_read_since_last_dr_read {
                     // RM-style SR->DR sequence clears receive and line-status flags.
                     self.sr &= !(USART_SR_RXNE | USART_SR_IDLE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                 }
                 self.sr_read_since_last_dr_read = false;
 
-                trace!("{} read={:02x}", self.name, v);
-                v
+                trace!("{} read={:02x}", self.name, self.dr);
+                self.dr
             }
             0x0008 => self.brr,
             0x000c => self.cr1,
