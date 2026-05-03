@@ -185,11 +185,19 @@ impl Nvic {
         }
     }
 
+    fn preempt_priority_value(&self, raw_prio: u8) -> u8 {
+        // Coarse PRIGROUP handling: fold lower subpriority bits out of
+        // arbitration comparisons so AIRCR.PRIGROUP influences preemption.
+        let sub_bits = self.priority_group.min(7);
+        raw_prio >> sub_bits
+    }
+
     fn is_external_irq_dispatchable(&self, irq: i32, basepri: u32, current_active_prio: Option<u8>) -> bool {
-        let prio = self.irq_priority_value(irq);
+        let raw_prio = self.irq_priority_value(irq);
+        let prio = self.preempt_priority_value(raw_prio);
 
         // BASEPRI masks priorities numerically >= BASEPRI.
-        if basepri != 0 && (prio as u32) >= basepri {
+        if basepri != 0 && (raw_prio as u32) >= basepri {
             return false;
         }
 
@@ -224,7 +232,7 @@ impl Nvic {
                 continue;
             }
 
-            let prio = self.irq_priority_value(irq_i32);
+            let prio = self.preempt_priority_value(self.irq_priority_value(irq_i32));
             let better_tie_break = match best_irq {
                 None => true,
                 Some(existing) => irq_i32 < existing,
@@ -326,7 +334,7 @@ impl Nvic {
 
         let current_active_prio = if current_exception >= IRQ_OFFSET as u64 {
             let active_irq = (current_exception as i32) - IRQ_OFFSET;
-            Some(self.irq_priority_value(active_irq))
+            Some(self.preempt_priority_value(self.irq_priority_value(active_irq)))
         } else {
             None
         };
