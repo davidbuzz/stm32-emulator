@@ -14,6 +14,7 @@ const RNG_CR_RNGEN: u32 = 1 << 2;
 const RNG_SR_DRDY: u32 = 1 << 0;
 const RNG_SR_SECS: u32 = 1 << 2;
 const RNG_SR_CECS: u32 = 1 << 1;
+const RNG_DRDY_DELAY_STEPS: u8 = 40;
 
 pub struct Rng {
     cr: u32,
@@ -71,7 +72,7 @@ impl Peripheral for Rng {
                 if self.cr & RNG_CR_RNGEN != 0 && (self.sr & RNG_SR_DRDY) != 0 {
                     let v = self.next_word();
                     self.sr &= !RNG_SR_DRDY;
-                    self.drdy_delay = 2;
+                    self.drdy_delay = RNG_DRDY_DELAY_STEPS;
                     v
                 } else {
                     0
@@ -86,7 +87,7 @@ impl Peripheral for Rng {
             0x00 => {
                 self.cr = value & RNG_CR_RNGEN;
                 if (self.cr & RNG_CR_RNGEN) != 0 {
-                    self.drdy_delay = 1;
+                    self.drdy_delay = RNG_DRDY_DELAY_STEPS;
                 } else {
                     self.sr &= !RNG_SR_DRDY;
                     self.drdy_delay = 0;
