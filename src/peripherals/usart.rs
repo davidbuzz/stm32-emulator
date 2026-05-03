@@ -156,6 +156,39 @@ impl Usart {
         }
     }
 
+    fn service_rx_state(&mut self, sys: &System) {
+        if !self.rx_enabled() || (self.cr3 & USART_CR3_DMAR) != 0 {
+            return;
+        }
+
+        // USART probes are TX observation endpoints and report 0 on reads.
+        // Skip RX polling to avoid synthetic RXNE noise.
+        if self.name.contains("usart-probe") {
+            return;
+        }
+
+        let Some(dev) = &self.ext_device else {
+            return;
+        };
+
+        let byte = dev.borrow_mut().read(sys, ());
+        if byte == 0 {
+            return;
+        }
+
+        if (self.sr & USART_SR_RXNE) != 0 {
+            // Overrun: keep existing DR until firmware reads it, and latch ORE.
+            self.sr |= USART_SR_ORE;
+            self.maybe_raise_irq(sys);
+            return;
+        }
+
+        self.dr = byte as u32;
+        self.sr |= USART_SR_RXNE;
+        self.sr &= !USART_SR_IDLE;
+        self.maybe_raise_irq(sys);
+    }
+
     fn maybe_raise_irq(&self, sys: &System) {
         if self.irq < 0 || (self.cr1 & USART_CR1_UE) == 0 {
             return;
@@ -188,6 +221,11 @@ impl Usart {
 }
 
 impl Peripheral for Usart {
+    fn step(&mut self, sys: &System) {
+        self.service_tx_state(sys);
+        self.service_rx_state(sys);
+    }
+
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
         // Service TX state before reading SR
         if offset == 0x0000 {
