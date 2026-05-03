@@ -190,6 +190,48 @@ impl Dma {
             .collect()
     }
 
+    fn stream_blocked_by_active_owner(&self, sys: &System, stream_idx: usize) -> bool {
+        if stream_idx >= self.streams.len() || (self.streams[stream_idx].cr & 1) == 0 {
+            return false;
+        }
+
+        let candidate = &self.streams[stream_idx];
+        let channel = candidate.channel();
+        let cand_dir = candidate.dir();
+        let cand_pl = candidate.priority();
+        let cand_peri_desc = sys.p.addr_desc(candidate.par);
+        let cand_peri_name = peripheral_name_from_desc(&cand_peri_desc);
+
+        for owner_idx in self.find_request_conflicts(stream_idx, channel) {
+            let owner = &self.streams[owner_idx];
+            let owner_peri_desc = sys.p.addr_desc(owner.par);
+            let owner_peri_name = peripheral_name_from_desc(&owner_peri_desc);
+            let same_peripheral_request = match (cand_peri_name, owner_peri_name) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+
+            if !same_peripheral_request {
+                continue;
+            }
+
+            let owner_dir = owner.dir();
+            let full_duplex_pair =
+                (cand_dir == Dir::Read && owner_dir == Dir::Write)
+                || (cand_dir == Dir::Write && owner_dir == Dir::Read);
+            if full_duplex_pair {
+                continue;
+            }
+
+            let owner_pl = owner.priority();
+            if owner_pl > cand_pl || (owner_pl == cand_pl && owner_idx < stream_idx) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn clear_ifcr_bank(reg: &mut u32, base_stream: usize, value: u32) {
         for local in 0..4 {
             let stream = base_stream + local;
@@ -228,6 +270,10 @@ impl Peripheral for Dma {
     fn step(&mut self, sys: &System) {
         let name = self.name.clone();
         for i in 0..8 {
+            if self.stream_blocked_by_active_owner(sys, i) {
+                continue;
+            }
+
             match self.streams[i].step_deferred(&name, i, sys) {
                 StreamStepResult::Completed { half } => {
                     if half {
