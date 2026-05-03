@@ -205,6 +205,11 @@ impl Dma {
 
         for owner_idx in self.find_request_conflicts(stream_idx, channel) {
             let owner = &self.streams[owner_idx];
+            if !owner.ready_for_step(sys) {
+                // Do not let sleeping/deferred owners starve an active contender.
+                continue;
+            }
+
             let owner_peri_desc = sys.p.addr_desc(owner.par);
             let owner_peri_name = peripheral_name_from_desc(&owner_peri_desc);
             let same_peripheral_request = match (cand_peri_name, owner_peri_name) {
@@ -456,6 +461,30 @@ struct Stream {
 }
 
 impl Stream {
+    fn ready_for_step(&self, sys: &System) -> bool {
+        if (self.cr & 1) == 0 || self.ndtr == 0 {
+            return false;
+        }
+
+        if self.disable_requested_at.is_some() {
+            return false;
+        }
+
+        if !self.deferred_usart_rx {
+            return true;
+        }
+
+        let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+        let peri_desc = sys.p.addr_desc(self.par);
+        let defer_delay = if is_usart_dr_request(&peri_desc) {
+            USART_RX_IDLE_DISABLE_DELAY
+        } else {
+            SDIO_DMA_DEFER_DELAY
+        };
+
+        now.saturating_sub(self.deferred_since) >= defer_delay
+    }
+
     fn tcie_enabled(&self) -> bool {
         self.cr & (1 << 4) != 0
     }
