@@ -508,6 +508,16 @@ impl Stream {
         ((self.cr >> 23) & 0b11) as u8
     }
 
+    fn burst_beats(field: u8) -> usize {
+        match field & 0b11 {
+            0b00 => 1,
+            0b01 => 4,
+            0b10 => 8,
+            0b11 => 16,
+            _ => 1,
+        }
+    }
+
     fn pinc(&self) -> bool {
         self.cr & (1 << 9) != 0
     }
@@ -925,6 +935,17 @@ impl Stream {
                 // In STM32F4 direct mode, burst transfers require FIFO mode.
                 // Reject this configuration and route to DME/FE signaling path.
                 if !self.fifo_enabled() && (self.pburst() != 0 || self.mburst() != 0) {
+                    return StreamWriteResult::ModeError;
+                }
+
+                // Burst transfers require address incrementing on the corresponding side.
+                if (self.pburst() != 0 && !self.pinc()) || (self.mburst() != 0 && !self.minc()) {
+                    return StreamWriteResult::ModeError;
+                }
+
+                // Basic burst consistency check: transfer length should align to burst beats.
+                let burst_beats = std::cmp::max(Self::burst_beats(self.pburst()), Self::burst_beats(self.mburst()));
+                if burst_beats > 1 && (self.ndtr as usize) % burst_beats != 0 {
                     return StreamWriteResult::ModeError;
                 }
 
