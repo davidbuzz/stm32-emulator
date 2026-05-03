@@ -367,10 +367,14 @@ impl Peripheral for Dma {
                             blocking_owners.push(owner);
                         } else if owner_pl < new_pl {
                             preempted_owners.push(owner);
-                        } else if owner < i {
-                            blocking_owners.push(owner);
                         } else {
-                            preempted_owners.push(owner);
+                            let owner_rank = (owner + 8 - (self.arb_cursor % 8)) % 8;
+                            let new_rank = (i + 8 - (self.arb_cursor % 8)) % 8;
+                            if owner_rank < new_rank {
+                                blocking_owners.push(owner);
+                            } else {
+                                preempted_owners.push(owner);
+                            }
                         }
                     }
 
