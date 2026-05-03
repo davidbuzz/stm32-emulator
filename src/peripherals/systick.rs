@@ -119,8 +119,9 @@ impl Peripheral for SysTick {
             }
             0x0004 => self.reload_value(),
             0x0008 => self.current_value(),
-            // CALIB: no reference clock modeled (NOREF=1), calibration value unknown.
-            0x000c => 1 << 31,
+            // CALIB: no reference clock modeled (NOREF=1), calibration not exact (SKEW=1).
+            // TENMS is left at 0 (unknown).
+            0x000c => (1 << 31) | (1 << 30),
             _ => 0
         }
     }
