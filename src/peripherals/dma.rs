@@ -27,6 +27,7 @@ pub struct Dma {
     streams: [Stream; 8],
     lisr: u32,
     hisr: u32,
+    arb_cursor: usize,
 }
 
 impl Dma {
@@ -224,9 +225,18 @@ impl Dma {
             }
 
             let owner_pl = owner.priority();
-            if owner_pl > cand_pl || (owner_pl == cand_pl && owner_idx < stream_idx) {
+            if owner_pl > cand_pl {
                 return true;
             }
+
+            if owner_pl == cand_pl {
+                let owner_rank = (owner_idx + 8 - (self.arb_cursor % 8)) % 8;
+                let cand_rank = (stream_idx + 8 - (self.arb_cursor % 8)) % 8;
+                if owner_rank < cand_rank {
+                    return true;
+                }
+            }
+
         }
 
         false
@@ -269,7 +279,8 @@ impl Dma {
 impl Peripheral for Dma {
     fn step(&mut self, sys: &System) {
         let name = self.name.clone();
-        for i in 0..8 {
+        for step_idx in 0..8 {
+            let i = (self.arb_cursor + step_idx) % 8;
             if self.stream_blocked_by_active_owner(sys, i) {
                 continue;
             }
@@ -287,6 +298,8 @@ impl Peripheral for Dma {
                 StreamStepResult::Noop => {}
             }
         }
+
+        self.arb_cursor = (self.arb_cursor + 1) % 8;
     }
 
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
