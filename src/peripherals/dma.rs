@@ -284,6 +284,7 @@ impl Dma {
 impl Peripheral for Dma {
     fn step(&mut self, sys: &System) {
         let name = self.name.clone();
+        let mut winner: Option<usize> = None;
         for step_idx in 0..8 {
             let i = (self.arb_cursor + step_idx) % 8;
             if self.stream_blocked_by_active_owner(sys, i) {
@@ -295,21 +296,28 @@ impl Peripheral for Dma {
                     if half {
                         self.signal_ht(sys, i);
                     }
+                    winner = Some(i);
+                    break;
                 }
                 StreamStepResult::Completed { half } => {
                     if half {
                         self.signal_ht(sys, i);
                     }
                     self.signal_tc(sys, i);
+                    winner = Some(i);
+                    break;
                 }
                 StreamStepResult::TransferError => {
                     self.signal_mode_error(sys, i);
+                    winner = Some(i);
+                    break;
                 }
                 StreamStepResult::Noop => {}
             }
         }
 
-        self.arb_cursor = (self.arb_cursor + 1) % 8;
+        self.arb_cursor = winner.map(|idx| (idx + 1) % 8)
+            .unwrap_or((self.arb_cursor + 1) % 8);
     }
 
     fn read(&mut self, sys: &System, offset: u32) -> u32 {
