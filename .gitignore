@@ -1,4 +1,5 @@
 /target
+*.log
 modules/ardupilot/
 # Reference clones (read-only, not submodules)
 modules/renode/

@@ -47,7 +47,11 @@ impl Scb {
                     .next_pending_intr()
                     .map(|irq| (16 + irq) as u32)
                     .unwrap_or(0);
-                let ret_to_base = if active == 0 { 1 } else { 0 };
+                let ret_to_base = if active == 0 || nvic.active_exception_depth() <= 1 {
+                    1
+                } else {
+                    0
+                };
 
                 active
                     | (pending << 12)

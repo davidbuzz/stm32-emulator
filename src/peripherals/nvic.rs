@@ -148,6 +148,10 @@ impl Nvic {
         self.next_dispatchable_bit().map(|bit| (bit as i32) - IRQ_OFFSET)
     }
 
+    pub fn active_exception_depth(&self) -> u32 {
+        self.active_exceptions
+    }
+
     fn irq_priority_value(&self, irq: i32) -> u8 {
         if irq >= 0 {
             self.irq_priority[irq as usize]
@@ -422,6 +426,9 @@ impl Nvic {
 
         let exception_number = (IRQ_OFFSET + irq) as u64;
         uc.reg_write(RegisterARM::IPSR, exception_number).unwrap();
+        // Cortex-M handlers always execute using MSP while in handler mode.
+        let handler_sp = uc.reg_read(RegisterARM::MSP).unwrap();
+        uc.reg_write(RegisterARM::SP, handler_sp).unwrap();
         uc.reg_write(RegisterARM::PC, vector as u64).unwrap();
 
         self.exc_return_stack.push(lr);
@@ -487,6 +494,18 @@ impl Nvic {
             );
             uc.reg_write(RegisterARM::MSP, entry_msp).unwrap();
         }
+
+        let active_sp = if restored_ipsr == 0 {
+            let control_reg = uc.reg_read(RegisterARM::CONTROL).unwrap() as u32;
+            if (control_reg & (1 << 1)) != 0 {
+                uc.reg_read(RegisterARM::PSP).unwrap()
+            } else {
+                uc.reg_read(RegisterARM::MSP).unwrap()
+            }
+        } else {
+            uc.reg_read(RegisterARM::MSP).unwrap()
+        };
+        uc.reg_write(RegisterARM::SP, active_sp).unwrap();
 
         self.active_exceptions = self.active_exceptions.saturating_sub(1);
         if entry_irq >= 0 && entry_irq < 128 {
