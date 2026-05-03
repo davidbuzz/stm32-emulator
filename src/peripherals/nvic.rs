@@ -35,6 +35,7 @@ pub struct Nvic {
     /// SHPR2 (0xE000ED1C): SVCall priority [31:24]
     /// SHPR3 (0xE000ED20): SysTick [31:24], PendSV [23:16]
     shpr: [u32; 3],
+    priority_group: u8,
     
     /// ICSR (Interrupt Control and State Register) bits for fault escalation
     /// Bit 25: VECTACTIVE - currently active ISR number
@@ -68,6 +69,7 @@ impl Default for Nvic {
             exc_return_stack: Vec::new(),
             exc_stack_state: Vec::new(),
             shpr: [0; 3],
+            priority_group: 0,
             icsr_state: 0,
             hardfault_pending: false,
             mmfault_active: false,
@@ -142,6 +144,29 @@ impl Nvic {
         if index < self.shpr.len() {
             self.shpr[index] = value;
         }
+    }
+
+    pub fn set_priority_group(&mut self, prigroup: u8) {
+        self.priority_group = prigroup & 0x7;
+    }
+
+    pub fn priority_group(&self) -> u8 {
+        self.priority_group
+    }
+
+    pub fn system_reset(&mut self) {
+        self.pending = 0;
+        self.enabled = 0;
+        self.active_external = 0;
+        self.systick_period = None;
+        self.last_systick_trigger = crate::emulator::NUM_INSTRUCTIONS.load(Ordering::Relaxed);
+        self.active_exceptions = 0;
+        self.exc_return_stack.clear();
+        self.exc_stack_state.clear();
+        self.hardfault_pending = false;
+        self.mmfault_active = false;
+        self.busfault_active = false;
+        self.usagefault_active = false;
     }
 
     pub fn next_pending_intr(&self) -> Option<i32> {

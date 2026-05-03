@@ -10,6 +10,7 @@
 // Datasheet/reference anchor: ARMv7-M SCB architecture as exposed on STM32F427.
 
 use crate::system::System;
+use unicorn_engine::RegisterARM;
 use super::{Peripheral, nvic::irq};
 
 #[derive(Default)]
@@ -37,6 +38,58 @@ const CFSR_BFARVALID: u32 = 1 << 15;
 const CFSR_INVSTATE: u32 = 1 << 17;
 
 impl Scb {
+    fn perform_system_reset(&mut self, sys: &System) {
+        let vtor = sys.p.nvic.borrow().vector_table_addr;
+        let mut msp_raw = [0u8; 4];
+        let mut reset_raw = [0u8; 4];
+        if sys.uc.borrow().mem_read(vtor as u64, &mut msp_raw).is_err()
+            || sys.uc.borrow().mem_read((vtor + 4) as u64, &mut reset_raw).is_err()
+        {
+            warn!("SCB SYSRESETREQ: failed to read reset vectors from VTOR=0x{:08x}", vtor);
+            return;
+        }
+
+        let new_msp = u32::from_le_bytes(msp_raw);
+        let mut new_pc = u32::from_le_bytes(reset_raw);
+        if (new_pc & 1) == 0 {
+            warn!(
+                "SCB SYSRESETREQ: reset vector without Thumb bit at VTOR=0x{:08x} value=0x{:08x}",
+                vtor,
+                new_pc
+            );
+            new_pc |= 1;
+        }
+
+        // Reset core-visible control state and reload reset vectors.
+        {
+            let mut uc = sys.uc.borrow_mut();
+            let _ = uc.reg_write(RegisterARM::MSP, new_msp as u64);
+            let _ = uc.reg_write(RegisterARM::SP, new_msp as u64);
+            let _ = uc.reg_write(RegisterARM::PC, new_pc as u64);
+            let _ = uc.reg_write(RegisterARM::IPSR, 0);
+            let _ = uc.reg_write(RegisterARM::CONTROL, 0);
+            let _ = uc.reg_write(RegisterARM::PRIMASK, 0);
+            let _ = uc.reg_write(RegisterARM::BASEPRI, 0);
+            let _ = uc.reg_write(RegisterARM::FAULTMASK, 0);
+        }
+
+        // Clear NVIC runtime state that is architecturally reset by SYSRESETREQ.
+        sys.p.nvic.borrow_mut().system_reset();
+
+        // Keep only PRIGROUP from AIRCR across reset; other SCB model fields reset.
+        self.scr = 0;
+        self.ccr = 0;
+        self.shpr = [0; 3];
+        self.shcsr = 0;
+        self.cfsr = 0;
+        self.hfsr = 0;
+        self.dfsr = 0;
+        self.mmfar = 0;
+        self.bfar = 0;
+        self.afsr = 0;
+        self.cpacr = 0;
+    }
+
     pub fn read(&mut self, sys: &System, offset: u32) -> u32 {
         let value = match offset {
             0x0000 => CPUID_CORTEX_M4,
@@ -110,6 +163,15 @@ impl Scb {
             0x000c => {
                 if value & 0xffff_0000 == AIRCR_VECTKEY {
                     self.aircr = value & 0x0000_ffff;
+                    let prigroup = ((self.aircr >> 8) & 0x7) as u8;
+                    sys.p.nvic.borrow_mut().set_priority_group(prigroup);
+                    if (self.aircr & (1 << 2)) != 0 {
+                        info!(
+                            "SCB AIRCR SYSRESETREQ asserted (prigroup={})",
+                            sys.p.nvic.borrow().priority_group()
+                        );
+                        self.perform_system_reset(sys);
+                    }
                 }
             }
             0x0010 => self.scr = value,
