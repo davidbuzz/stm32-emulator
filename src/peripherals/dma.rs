@@ -353,6 +353,9 @@ impl Peripheral for Dma {
                         }
                         self.signal_tc(sys, i);
                     }
+                    StreamWriteResult::FifoError => {
+                        self.signal_fe(sys, i);
+                    }
                     StreamWriteResult::ModeError => {
                         self.signal_mode_error(sys, i);
                     }
@@ -877,7 +880,7 @@ impl Stream {
                 // If FIFO threshold was violated, signal FE and return error
                 if self.fifo_error_pending {
                     self.fifo_error_pending = false;
-                    return StreamWriteResult::ModeError;
+                    return StreamWriteResult::FifoError;
                 }
                 
                 // HT should fire if initial_ndtr > 1 (multi-beat transfer crosses half-way point)
@@ -1001,6 +1004,7 @@ struct XferOutcome {
 enum StreamWriteResult {
     Noop,
     Completed { half: bool },
+    FifoError,
     TransferError,
     ModeError,
 }
