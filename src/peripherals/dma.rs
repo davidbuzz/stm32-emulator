@@ -19,6 +19,7 @@ use super::Peripherals;
 const USART_RX_IDLE_DISABLE_DELAY: u64 = 20_000;
 const SDIO_DMA_DEFER_DELAY: u64 = 64;
 const DMA_EN_DISABLE_DELAY: u64 = 8;
+const DMA_FIFO_CAPACITY_BYTES: usize = 16;
 
 #[derive(Default)]
 pub struct Dma {
@@ -495,6 +496,10 @@ impl Stream {
         }
     }
 
+    fn fifo_threshold_bytes(&self) -> usize {
+        self.fifo_threshold_words() * 4
+    }
+
     fn transfer_beats_per_chunk(&self) -> usize {
         if !self.fifo_enabled() {
             // Direct mode: effectively one beat per request window.
@@ -503,7 +508,7 @@ impl Stream {
 
         // FIFO mode: transfer one FIFO threshold worth of beats at a time.
         // FIFO is 4 words = 16 bytes.
-        let fifo_bytes = self.fifo_threshold_words() * 4;
+        let fifo_bytes = self.fifo_threshold_bytes();
         let beat_bytes = std::cmp::max(self.psize(), self.msize());
         std::cmp::max(1, fifo_bytes / std::cmp::max(1, beat_bytes))
     }
@@ -519,22 +524,11 @@ impl Stream {
 
         let beat_bytes = std::cmp::max(self.psize(), self.msize());
         let incoming_bytes = beats_to_transfer * beat_bytes;
-        let fifo_capacity = self.fifo_threshold_words() * 4;
-        let threshold = fifo_capacity;
 
-        let dir = self.dir();
-        match dir {
-            Dir::Read => {
-                // P2M: check if FIFO can accommodate incoming data
-                // Overflow occurs if accumulated FIFO data + incoming would exceed threshold
-                self.fifo_bytes + incoming_bytes > threshold
-            }
-            Dir::Write => {
-                // M2P: data is sourced from memory in this model; do not gate on fifo_bytes.
-                false
-            }
-            _ => false,
-        }
+        // FIFO threshold (FTH) is not the FIFO capacity. Capacity is fixed at 16 bytes.
+        // We treat oversized chunk requests as FIFO errors while allowing smaller-than-threshold
+        // chunks to proceed (threshold is a service watermark, not a hard minimum transfer size).
+        incoming_bytes > DMA_FIFO_CAPACITY_BYTES
     }
 
     fn fifo_status_bits(&self) -> u32 {
@@ -544,20 +538,27 @@ impl Stream {
             return 0b100;
         }
 
-        let chunk_beats = self.transfer_beats_per_chunk();
-        let beat_bytes = std::cmp::max(self.psize(), self.msize());
-        let rem_beats = (self.ndtr as usize) % chunk_beats;
-        let active_beats = if rem_beats == 0 { chunk_beats } else { rem_beats };
-        let bytes = active_beats * beat_bytes;
-        let words = std::cmp::min(4, (bytes + 3) / 4);
-
-        match words {
-            0 => 0b100,
-            1 => 0b001,
-            2 => 0b010,
-            3 => 0b011,
-            _ => 0b101,
+        if self.fifo_bytes == 0 {
+            return 0b100;
         }
+
+        if self.fifo_bytes >= DMA_FIFO_CAPACITY_BYTES {
+            return 0b101;
+        }
+
+        if self.fifo_bytes < 4 {
+            return 0b000;
+        }
+
+        if self.fifo_bytes < 8 {
+            return 0b001;
+        }
+
+        if self.fifo_bytes < 12 {
+            return 0b010;
+        }
+
+        return 0b011;
     }
 
     /// Perform one complete DMA transfer respecting PINC/MINC.
@@ -626,6 +627,11 @@ impl Stream {
             let beats = std::cmp::min(remaining_beats, chunk_beats);
             let peri_total = psize * beats;
             let mem_total = msize * beats;
+            let fifo_chunk_bytes = beats * std::cmp::max(psize, msize);
+
+            if self.fifo_enabled() {
+                self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, fifo_chunk_bytes);
+            }
 
             match dir {
                 Dir::Read => {
@@ -757,18 +763,10 @@ impl Stream {
 
         // Update FIFO byte tracking after transfer
         if ok && self.fifo_enabled() {
-            match dir {
-                Dir::Read => {
-                    // P2M: FIFO receives incoming data
-                    self.fifo_bytes = self.fifo_bytes.saturating_add(transferred_total_bytes);
-                    self.fifo_bytes = std::cmp::min(self.fifo_bytes, self.fifo_threshold_words() * 4);
-                }
-                Dir::Write => {
-                    // M2P: FIFO is drained by outgoing data
-                    self.fifo_bytes = self.fifo_bytes.saturating_sub(transferred_total_bytes);
-                }
-                _ => {}
-            }
+            let _ = dir;
+            let _ = transferred_total_bytes;
+            // DMA model performs chunk service atomically; FIFO drains by end of the transfer slice.
+            self.fifo_bytes = 0;
         }
 
         let half_threshold = self.initial_ndtr / 2;
@@ -828,6 +826,7 @@ impl Stream {
                     self.disable_requested_at = Some(NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed));
                     self.cr = value;
                     self.deferred_usart_rx = false;
+                    self.fifo_bytes = 0;
                     return StreamWriteResult::Noop;
                 }
 
@@ -846,6 +845,7 @@ impl Stream {
                 // EN clear request (without pending disable) - shouldn't reach here but be safe
                 if !new_enabled {
                     self.deferred_usart_rx = false;
+                    self.fifo_bytes = 0;
                     return StreamWriteResult::Noop;
                 }
 
