@@ -88,17 +88,23 @@ impl Peripheral for Exti {
             0x08 => self.rtsr = value & EXTI_LINE_MASK,
             0x0c => self.ftsr = value & EXTI_LINE_MASK,
             0x10 => {
-                // SWIER: writing 1 sets bit and generates corresponding software event/interrupt.
+                // SWIER: writing 1 latches the software-pending bit and sets PR.
+                // Bit remains asserted until cleared through PR write-1.
                 let trigger_bits = value & EXTI_LINE_MASK;
+                let newly_set = trigger_bits & !self.swier;
                 self.swier |= trigger_bits;
                 for line in 0u8..=22 {
-                    if (trigger_bits >> line) & 1 != 0 {
+                    if (newly_set >> line) & 1 != 0 {
                         self.trigger_line(sys, line);
                     }
                 }
             }
             // Write 1 to clear the corresponding pending bit.
-            0x14 => self.pr &= !(value & EXTI_LINE_MASK),
+            0x14 => {
+                let clear = value & EXTI_LINE_MASK;
+                self.pr &= !clear;
+                self.swier &= !clear;
+            }
             _ => {}
         }
     }
