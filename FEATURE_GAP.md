@@ -154,7 +154,7 @@
 | SDIO timeout and CRC error generation. | low | open | CTIMEOUT DTIMEOUT CCRCFAIL DCRCFAIL status bits in STA are never set from actual protocol conditions. |
 | SPI CRC mode behavior. | low | open | CRCEN bit in CR1 enables hardware CRC calculation over the frame. CR1 CRCEN is stored but the CRC polynomial and running CRC register (RXCRCR TXCRCR) are not updated during transfers. |
 | SPI I2S protocol mode. | low | open | I2SCFGR I2SPR registers are stored but I2S audio protocol operation is not implemented. Firmware that switches SPI peripherals to I2S mode will see no audio output. |
-| SPI NSS hardware management. | low | open | SSM=0 and SSOE hardware-NSS logic is not implemented. NSS is always treated as software-managed regardless of SSM. |
+| SPI NSS hardware management. | low | partially implemented | SPI mode-fault path now distinguishes software NSS from hardware NSS and honors SSOE+SPE for master-mode NSS-high behavior. External NSS pin sampling/drive coupling is still not modeled. |
 | SPI OVR MODF clear sequences. | low | done | OVR now clears only on DR read followed by SR read, and MODF clears only on SR read followed by CR1 write, matching RM sequencing expectations. |
 | SW_SPI CPOL CPHA configuration. | low | done | Software SPI now models CPOL+CPHA mode timing using leading/trailing edges, with CPHA-aware sampling and shifting so non-default SPI modes exchange bits on the correct edge. |
 | SysTick CTRL ENABLE vs TICKINT separation. | medium | done | SysTick counter now advances continuously from peripheral step() whenever ENABLE=1, independent of TICKINT. TICKINT remains interrupt-only gating via NVIC period setup, so time-keeping progresses even with interrupts disabled. |

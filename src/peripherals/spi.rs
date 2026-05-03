@@ -20,11 +20,11 @@ use std::collections::VecDeque;
 const SPI_CR1_CPHA: u32 = 1 << 0;
 const SPI_CR1_MSTR: u32 = 1 << 2;
 const SPI_CR1_SPE: u32 = 1 << 6;
-const SPI_CR1_SSI: u32 = 1 << 8;
 const SPI_CR1_SSM: u32 = 1 << 9;
 
 const SPI_CR2_RXDMAEN: u32 = 1 << 0;
 const SPI_CR2_TXDMAEN: u32 = 1 << 1;
+const SPI_CR2_SSOE: u32 = 1 << 2;
 const SPI_CR2_ERRIE: u32 = 1 << 5;
 const SPI_CR2_RXNEIE: u32 = 1 << 6;
 const SPI_CR2_TXEIE: u32 = 1 << 7;
@@ -85,8 +85,15 @@ impl Spi {
     fn check_mode_fault(&mut self) {
         let master = (self.cr1 & SPI_CR1_MSTR) != 0;
         let hw_nss = (self.cr1 & SPI_CR1_SSM) == 0;
-        let nss_low = (self.cr1 & SPI_CR1_SSI) == 0;
-        if master && hw_nss && nss_low {
+        let spe_enabled = (self.cr1 & SPI_CR1_SPE) != 0;
+        let ssoe = (self.cr2 & SPI_CR2_SSOE) != 0;
+
+        // In hardware-NSS mode, if SSOE is enabled and SPE is set, NSS is driven high
+        // by hardware and MODF should not trigger. Without SSOE/external NSS modeling,
+        // treat NSS as low and raise MODF for master mode.
+        let nss_low = hw_nss && !(ssoe && spe_enabled);
+
+        if master && nss_low {
             self.modf = true;
             self.modf_sr_read_pending_cr1_clear = false;
             // Hardware clears SPE on mode fault.
