@@ -290,11 +290,10 @@ impl Peripheral for Usart {
                     return self.dr;
                 }
 
-                let v = self.ext_device.as_ref()
-                    .map(|d| d.borrow_mut().read(sys, ()))
-                    .unwrap_or(self.dr as u8) as u32;
-
-                self.dr = v & self.rx_data_mask();
+                // Return the latched DR value. Incoming data is sampled in service_rx_state(),
+                // not during DR reads, so repeated DR accesses do not consume new bytes.
+                self.service_rx_state(sys);
+                self.dr &= self.rx_data_mask();
                 if self.sr_read_since_last_dr_read {
                     // RM-style SR->DR sequence clears receive and line-status flags.
                     self.sr &= !(USART_SR_RXNE | USART_SR_IDLE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
