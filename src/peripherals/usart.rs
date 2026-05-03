@@ -120,6 +120,14 @@ impl Usart {
         raw_delay.clamp(2, 128)
     }
 
+    fn tx_enabled(&self) -> bool {
+        (self.cr1 & USART_CR1_UE) != 0 && (self.cr1 & USART_CR1_TE) != 0
+    }
+
+    fn rx_enabled(&self) -> bool {
+        (self.cr1 & USART_CR1_UE) != 0 && (self.cr1 & USART_CR1_RE) != 0
+    }
+
     /// Service TX state machine: transition TXE/TC based on TX timing
     fn service_tx_state(&mut self, sys: &System) {
         if let Some(tx_since) = self.tx_active_since {
@@ -185,6 +193,11 @@ impl Peripheral for Usart {
             }
             0x0004 => {
                 // DR register: reading clears RXNE and IDLE
+                if !self.rx_enabled() {
+                    self.sr_read_since_last_dr_read = false;
+                    return self.dr;
+                }
+
                 let v = self.ext_device.as_ref()
                     .map(|d| d.borrow_mut().read(sys, ()))
                     .unwrap_or(self.dr as u8) as u32;
@@ -228,8 +241,10 @@ impl Peripheral for Usart {
                 // DR register write: indicates TX data write
                 self.dr = value & self.tx_data_mask();
 
-                // Only transmit if USART enabled (UE) and transmitter enabled (TE)
-                let tx_enabled = (self.cr1 & USART_CR1_UE) != 0 && (self.cr1 & USART_CR1_TE) != 0;
+                // Ignore transmission side effects when UE/TE do not permit TX.
+                if !self.tx_enabled() {
+                    return;
+                }
 
                 // Clear TXE on write (DR now full), clear TC (new transmission starting)
                 self.sr &= !(USART_SR_TXE | USART_SR_TC);
@@ -237,7 +252,7 @@ impl Peripheral for Usart {
                 self.tx_active_since = Some(NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed));
 
                 // If DMA TX is not enabled, write directly to ext_device
-                if tx_enabled && (self.cr3 & USART_CR3_DMAT) == 0 {
+                if (self.cr3 & USART_CR3_DMAT) == 0 {
                     self.ext_device.as_ref().map(|d|
                         d.borrow_mut().write(sys, (), self.dr as u8)
                     );
@@ -248,11 +263,27 @@ impl Peripheral for Usart {
             0x0008 => self.brr = value & 0x0000_ffff,
             0x000c => {
                 let old_ue = (self.cr1 & USART_CR1_UE) != 0;
+                let old_te = (self.cr1 & USART_CR1_TE) != 0;
+                let old_re = (self.cr1 & USART_CR1_RE) != 0;
                 self.cr1 = value;
                 let new_ue = (self.cr1 & USART_CR1_UE) != 0;
+                let new_te = (self.cr1 & USART_CR1_TE) != 0;
+                let new_re = (self.cr1 & USART_CR1_RE) != 0;
+
                 if old_ue && !new_ue {
                     self.tx_active_since = None;
+                    self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                 }
+
+                if old_te && !new_te {
+                    self.tx_active_since = None;
+                    self.sr |= USART_SR_TXE | USART_SR_TC;
+                }
+
+                if old_re && !new_re {
+                    self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                }
+
                 self.maybe_raise_irq(sys);
             }
             0x0010 => {
@@ -273,7 +304,7 @@ impl Peripheral for Usart {
         // DMA reads should use the batched ext_device path to avoid per-byte virtual-call overhead.
         let mut result = VecDeque::with_capacity(size);
 
-        if offset == 0x0004 && (self.cr3 & USART_CR3_DMAR) != 0 {
+        if offset == 0x0004 && (self.cr3 & USART_CR3_DMAR) != 0 && self.rx_enabled() {
             if let Some(dev) = &self.ext_device {
                 for byte in dev.borrow_mut().read_batch(sys, (), size) {
                     result.push_back(byte);
@@ -294,7 +325,7 @@ impl Peripheral for Usart {
     }
 
     fn write_dma(&mut self, sys: &System, offset: u32, mut value: VecDeque<u8>) {
-        if offset == 0x0004 && (self.cr3 & USART_CR3_DMAT) != 0 {
+        if offset == 0x0004 && (self.cr3 & USART_CR3_DMAT) != 0 && self.tx_enabled() {
             if let Some(dev) = &self.ext_device {
                 let bytes = value.make_contiguous();
                 if let Some(last) = bytes.last().copied() {

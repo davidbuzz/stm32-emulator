@@ -301,9 +301,14 @@ impl Peripheral for Dma {
                         }
 
                         // Priority-aware conflict resolution for same request owner:
-                        // - Equal/higher owner priority blocks this stream.
+                        // - Higher owner priority blocks this stream.
                         // - Lower owner priority is preempted by disabling EN.
-                        if owner_pl >= new_pl {
+                        // - Equal priority uses stream index as tiebreaker (lower stream wins).
+                        if owner_pl > new_pl {
+                            blocking_owners.push(owner);
+                        } else if owner_pl < new_pl {
+                            preempted_owners.push(owner);
+                        } else if owner < i {
                             blocking_owners.push(owner);
                         } else {
                             preempted_owners.push(owner);
