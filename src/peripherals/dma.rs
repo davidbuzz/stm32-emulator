@@ -40,46 +40,61 @@ impl Dma {
 
     fn set_tcif(&mut self, stream: usize) {
         let bit = tcif_mask(stream);
+        let gif = gif_mask(stream);
         if stream < 4 {
             self.lisr |= bit;
+            self.lisr |= gif;
         } else {
             self.hisr |= bit;
+            self.hisr |= gif;
         }
     }
 
     fn set_htif(&mut self, stream: usize) {
         let bit = htif_mask(stream);
+        let gif = gif_mask(stream);
         if stream < 4 {
             self.lisr |= bit;
+            self.lisr |= gif;
         } else {
             self.hisr |= bit;
+            self.hisr |= gif;
         }
     }
 
     fn set_teif(&mut self, stream: usize) {
         let bit = teif_mask(stream);
+        let gif = gif_mask(stream);
         if stream < 4 {
             self.lisr |= bit;
+            self.lisr |= gif;
         } else {
             self.hisr |= bit;
+            self.hisr |= gif;
         }
     }
 
     fn set_dmeif(&mut self, stream: usize) {
         let bit = dmeif_mask(stream);
+        let gif = gif_mask(stream);
         if stream < 4 {
             self.lisr |= bit;
+            self.lisr |= gif;
         } else {
             self.hisr |= bit;
+            self.hisr |= gif;
         }
     }
 
     fn set_feif(&mut self, stream: usize) {
         let bit = feif_mask(stream);
+        let gif = gif_mask(stream);
         if stream < 4 {
             self.lisr |= bit;
+            self.lisr |= gif;
         } else {
             self.hisr |= bit;
+            self.hisr |= gif;
         }
     }
 
@@ -177,6 +192,14 @@ impl Dma {
     fn clear_ifcr_bank(reg: &mut u32, base_stream: usize, value: u32) {
         for local in 0..4 {
             let stream = base_stream + local;
+            let cgif = gif_mask(stream);
+            let stream_flags = stream_flag_mask(stream);
+
+            if (value & cgif) != 0 {
+                *reg &= !(stream_flags | cgif);
+                continue;
+            }
+
             if (value & feif_mask(stream)) != 0 {
                 *reg &= !feif_mask(stream);
             }
@@ -191,6 +214,10 @@ impl Dma {
             }
             if (value & tcif_mask(stream)) != 0 {
                 *reg &= !tcif_mask(stream);
+            }
+
+            if (*reg & stream_flags) == 0 {
+                *reg &= !cgif;
             }
         }
     }
@@ -249,6 +276,7 @@ impl Peripheral for Dma {
 
                     let owners = self.find_request_conflicts(i, channel);
                     let mut blocking_owners = Vec::new();
+                    let mut preempted_owners = Vec::new();
                     for owner in owners {
                         let owner_peri_desc = sys.p.addr_desc(self.streams[owner].par);
                         let owner_peri_name = peripheral_name_from_desc(&owner_peri_desc);
@@ -262,12 +290,22 @@ impl Peripheral for Dma {
                         }
 
                         let owner_dir = self.streams[owner].dir();
+                        let owner_pl = self.streams[owner].priority();
                         // Keep full-duplex read/write stream pair sharing for SPI-style transfers.
                         let full_duplex_pair =
                             (new_dir == Dir::Read && owner_dir == Dir::Write)
                             || (new_dir == Dir::Write && owner_dir == Dir::Read);
-                        if !full_duplex_pair {
+                        if full_duplex_pair {
+                            continue;
+                        }
+
+                        // Priority-aware conflict resolution for same request owner:
+                        // - Equal/higher owner priority blocks this stream.
+                        // - Lower owner priority is preempted by disabling EN.
+                        if owner_pl >= new_pl {
                             blocking_owners.push(owner);
+                        } else {
+                            preempted_owners.push(owner);
                         }
                     }
 
@@ -282,6 +320,23 @@ impl Peripheral for Dma {
                             new_pl
                         );
                         return;
+                    }
+
+                    for owner in preempted_owners {
+                        self.streams[owner].cr &= !1;
+                        self.streams[owner].next_cr = None;
+                        self.streams[owner].deferred_usart_rx = false;
+                        self.streams[owner].disable_requested_at = None;
+                        debug!(
+                            "{} stream={} preempted lower-priority owner stream={} channel={} peri={} (new_pl={} owner_pl={})",
+                            self.name,
+                            i,
+                            owner,
+                            channel,
+                            peri_desc,
+                            new_pl,
+                            self.streams[owner].priority()
+                        );
                     }
                 }
 
@@ -717,7 +772,9 @@ impl Stream {
         }
 
         let half_threshold = self.initial_ndtr / 2;
-        let half = self.initial_ndtr > 1 && self.ndtr <= half_threshold;
+        let half = self.initial_ndtr > 1
+            && (ndtr as u32) > half_threshold
+            && self.ndtr <= half_threshold;
 
         XferOutcome { ok, half }
     }
@@ -1089,6 +1146,20 @@ fn feif_mask(stream: usize) -> u32 {
         3 => 1 << 22,
         _ => 0,
     }
+}
+
+fn gif_mask(stream: usize) -> u32 {
+    match stream % 4 {
+        0 => 1 << 1,
+        1 => 1 << 7,
+        2 => 1 << 17,
+        3 => 1 << 23,
+        _ => 0,
+    }
+}
+
+fn stream_flag_mask(stream: usize) -> u32 {
+    feif_mask(stream) | dmeif_mask(stream) | teif_mask(stream) | htif_mask(stream) | tcif_mask(stream)
 }
 
 impl Access {
