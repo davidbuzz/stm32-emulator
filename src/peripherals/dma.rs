@@ -484,7 +484,9 @@ impl Stream {
 
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         let peri_desc = sys.p.addr_desc(self.par);
-        let defer_delay = if is_usart_dr_request(&peri_desc) {
+        let defer_delay = if self.pfctrl() {
+            0
+        } else if is_usart_dr_request(&peri_desc) {
             USART_RX_IDLE_DISABLE_DELAY
         } else {
             SDIO_DMA_DEFER_DELAY
@@ -532,6 +534,10 @@ impl Stream {
             0b10 => Dir::MemCopy,
             _ => Dir::Invalid,
         }
+    }
+
+    fn pfctrl(&self) -> bool {
+        self.cr & (1 << 5) != 0
     }
 
     fn is_circular(&self) -> bool {
@@ -624,6 +630,11 @@ impl Stream {
     }
 
     fn transfer_beats_per_chunk(&self) -> usize {
+        if self.pfctrl() {
+            // Peripheral-flow-controller mode should pace transfers in smaller slices.
+            return 1;
+        }
+
         if !self.fifo_enabled() {
             // Direct mode: effectively one beat per request window.
             return 1;
@@ -991,6 +1002,14 @@ impl Stream {
                     return StreamWriteResult::ModeError;
                 }
 
+                if self.pfctrl() {
+                    // PFCTRL mode is peripheral-driven and not valid for memory-to-memory
+                    // or direct mode operation in this model.
+                    if self.dir() == Dir::MemCopy || !self.fifo_enabled() {
+                        return StreamWriteResult::ModeError;
+                    }
+                }
+
                 // Burst transfers require address incrementing on the corresponding side.
                 if (self.pburst() != 0 && !self.pinc()) || (self.mburst() != 0 && !self.minc()) {
                     return StreamWriteResult::ModeError;
@@ -1075,6 +1094,10 @@ impl Stream {
     }
 
     fn is_deferred_peripheral_rx(&self, sys: &System) -> bool {
+        if self.pfctrl() {
+            return true;
+        }
+
         if self.dir() != Dir::Read {
             return false;
         }
@@ -1090,7 +1113,9 @@ impl Stream {
 
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         let peri_desc = sys.p.addr_desc(self.par);
-        let defer_delay = if is_usart_dr_request(&peri_desc) {
+        let defer_delay = if self.pfctrl() {
+            0
+        } else if is_usart_dr_request(&peri_desc) {
             USART_RX_IDLE_DISABLE_DELAY
         } else {
             SDIO_DMA_DEFER_DELAY
