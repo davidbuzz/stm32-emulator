@@ -21,6 +21,7 @@ pub struct Rng {
     sr: u32,
     lfsr: u32,
     drdy_delay: u8,
+    steps: u32,
 }
 
 impl Rng {
@@ -31,6 +32,7 @@ impl Rng {
                 sr: 0,
                 lfsr: 0x1234_5678,
                 drdy_delay: 0,
+                steps: 0,
             }))
         } else {
             None
@@ -54,6 +56,22 @@ impl Peripheral for Rng {
             self.sr &= !RNG_SR_DRDY;
             return;
         }
+
+        self.steps = self.steps.wrapping_add(1);
+
+        // Deterministic sparse fault modeling so firmware can observe CECS/SECS behavior.
+        // Keep these events rare and sticky until write-1 clear via SR.
+        if (self.steps % 4096) == 0 && (self.sr & RNG_SR_CECS) == 0 {
+            self.sr |= RNG_SR_CECS;
+            self.sr &= !RNG_SR_DRDY;
+            self.drdy_delay = RNG_DRDY_DELAY_STEPS;
+        }
+        if (self.steps % 12288) == 0 && (self.sr & RNG_SR_SECS) == 0 {
+            self.sr |= RNG_SR_SECS;
+            self.sr &= !RNG_SR_DRDY;
+            self.drdy_delay = RNG_DRDY_DELAY_STEPS;
+        }
+
         if self.drdy_delay > 0 {
             self.drdy_delay -= 1;
         }
