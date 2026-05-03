@@ -91,7 +91,10 @@ pub struct Gpio {
     afrl: u32,
     afrh: u32,
     od_prev: u32,  // Track previous ODR state for pin transition detection
-    locked: bool,
+    lock_mask: u16,
+    lock_active: bool,
+    lock_seq_state: u8,
+    lock_seq_mask: u16,
 }
 
 impl Gpio {
@@ -123,6 +126,26 @@ impl Gpio {
     fn port_str(&self, pin: u8) -> String {
         format!("GPIO{} P{}{}", self.port_letter, self.port_letter, pin)
     }
+
+    fn expanded_lock_mask(&self, stride: u8, start_pin: u8, end_pin: u8) -> u32 {
+        let mut mask = 0u32;
+        for pin in start_pin..=end_pin {
+            if (self.lock_mask & (1u16 << pin)) != 0 {
+                let bit = (pin - start_pin) * stride;
+                let field_mask = (1u32 << stride) - 1;
+                mask |= field_mask << bit;
+            }
+        }
+        mask
+    }
+
+    fn apply_config_write_with_lock(&self, old_value: u32, requested: u32, stride: u8, start_pin: u8, end_pin: u8) -> u32 {
+        if !self.lock_active {
+            return requested;
+        }
+        let locked_bits = self.expanded_lock_mask(stride, start_pin, end_pin);
+        (requested & !locked_bits) | (old_value & locked_bits)
+    }
 }
 
 impl Peripheral for Gpio {
@@ -152,10 +175,8 @@ impl Peripheral for Gpio {
     fn write(&mut self, sys: &System, offset: u32, value: u32) {
         match offset {
             0x0000 => {
-                if self.locked {
-                    return;
-                }
-                Self::iter_port_reg_changes(self.mode, value, 2, |pin, v| {
+                let next = self.apply_config_write_with_lock(self.mode, value, 2, 0, 15);
+                Self::iter_port_reg_changes(self.mode, next, 2, |pin, v| {
                     let config = match v {
                         0b00 => "input",
                         0b01 => "output",
@@ -165,13 +186,11 @@ impl Peripheral for Gpio {
                     };
                     trace!("{} mode={}", self.port_str(pin), config);
                 });
-                self.mode = value;
+                self.mode = next;
             }
             0x0004 => {
-                if self.locked {
-                    return;
-                }
-                Self::iter_port_reg_changes(self.otype, value, 1, |pin, v| {
+                let next = self.apply_config_write_with_lock(self.otype, value, 1, 0, 15);
+                Self::iter_port_reg_changes(self.otype, next, 1, |pin, v| {
                     let config = match v {
                         0b0 => "push-pull",
                         0b1 => "open-drain",
@@ -179,13 +198,11 @@ impl Peripheral for Gpio {
                     };
                     trace!("{} output_cfg={}", self.port_str(pin), config);
                 });
-                self.otype = value;
+                self.otype = next;
             }
             0x0008 => {
-                if self.locked {
-                    return;
-                }
-                Self::iter_port_reg_changes(self.ospeed, value, 2, |pin, v| {
+                let next = self.apply_config_write_with_lock(self.ospeed, value, 2, 0, 15);
+                Self::iter_port_reg_changes(self.ospeed, next, 2, |pin, v| {
                     let config = match v {
                         0b00 => "low",
                         0b01 => "medium",
@@ -195,13 +212,11 @@ impl Peripheral for Gpio {
                     };
                     trace!("{} speed={}", self.port_str(pin), config);
                 });
-                self.ospeed = value;
+                self.ospeed = next;
             }
             0x000C => {
-                if self.locked {
-                    return;
-                }
-                Self::iter_port_reg_changes(self.pupd, value, 2, |pin, v| {
+                let next = self.apply_config_write_with_lock(self.pupd, value, 2, 0, 15);
+                Self::iter_port_reg_changes(self.pupd, next, 2, |pin, v| {
                     let config = match v {
                         0b00 => "regular",
                         0b01 => "pull-up",
@@ -211,7 +226,7 @@ impl Peripheral for Gpio {
                     };
                     trace!("{} input_cfg={}", self.port_str(pin), config);
                 });
-                self.pupd = value;
+                self.pupd = next;
             }
             0x0010 => {
                 // input data register. read-only
@@ -264,29 +279,61 @@ impl Peripheral for Gpio {
                 self.od_prev = new_od;
             }
             0x001C => {
-                trace!("GPIO{} port locked", self.port_letter);
-                self.lck = value;
-                if (value & (1 << 16)) != 0 {
-                    self.locked = true;
+                if self.lock_active {
+                    return;
+                }
+
+                let lckk = ((value >> 16) & 1) != 0;
+                let pin_mask = (value & 0xFFFF) as u16;
+
+                match self.lock_seq_state {
+                    0 => {
+                        if lckk {
+                            self.lock_seq_state = 1;
+                            self.lock_seq_mask = pin_mask;
+                        }
+                    }
+                    1 => {
+                        if !lckk && pin_mask == self.lock_seq_mask {
+                            self.lock_seq_state = 2;
+                        } else {
+                            self.lock_seq_state = 0;
+                            self.lock_seq_mask = 0;
+                        }
+                    }
+                    2 => {
+                        if lckk && pin_mask == self.lock_seq_mask {
+                            self.lock_active = true;
+                            self.lock_mask = pin_mask;
+                            self.lck = (1 << 16) | self.lock_mask as u32;
+                            trace!("GPIO{} lock engaged mask=0x{:04x}", self.port_letter, self.lock_mask);
+                        }
+                        self.lock_seq_state = 0;
+                        self.lock_seq_mask = 0;
+                    }
+                    _ => {
+                        self.lock_seq_state = 0;
+                        self.lock_seq_mask = 0;
+                    }
+                }
+
+                if !self.lock_active {
+                    self.lck = value & 0x1FFFF;
                 }
             }
             0x0020 => {
-                if self.locked {
-                    return;
-                }
-                Self::iter_port_reg_changes(self.afrl, value, 4, |pin, v| {
+                let next = self.apply_config_write_with_lock(self.afrl, value, 4, 0, 7);
+                Self::iter_port_reg_changes(self.afrl, next, 4, |pin, v| {
                     trace!("{} alternate_cfg=AF{}", self.port_str(pin), v);
                 });
-                self.afrl = value;
+                self.afrl = next;
             }
             0x0024 => {
-                if self.locked {
-                    return;
-                }
-                Self::iter_port_reg_changes(self.afrh, value, 4, |pin, v| {
+                let next = self.apply_config_write_with_lock(self.afrh, value, 4, 8, 15);
+                Self::iter_port_reg_changes(self.afrh, next, 4, |pin, v| {
                     trace!("{} alternate_cfg=AF{}", self.port_str(pin+8), v);
                 });
-                self.afrh = value;
+                self.afrh = next;
             }
             _ => {
                 warn!("GPIO invalid offset=0x{:08x}", offset);
