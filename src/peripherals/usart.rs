@@ -56,6 +56,7 @@ pub struct Usart {
     cr2: u32,
     cr3: u32,
     gtpr: u32,
+    rx_dma_pending: VecDeque<u8>,
     
     // TX state machine: track when DR was written to trigger TXE/TC transitions
     tx_active_since: Option<u64>,
@@ -174,7 +175,7 @@ impl Usart {
     }
 
     fn service_rx_state(&mut self, sys: &System) {
-        if !self.rx_enabled() || (self.cr3 & USART_CR3_DMAR) != 0 {
+        if !self.rx_enabled() {
             return;
         }
 
@@ -190,6 +191,22 @@ impl Usart {
 
         let byte = dev.borrow_mut().read(sys, ());
         if byte == 0 {
+            return;
+        }
+
+        if (self.cr3 & USART_CR3_DMAR) != 0 {
+            // With DMAR enabled, stage a single pending byte for DMA consumption.
+            // A second byte arriving before DMA drains the first is treated as overrun.
+            if !self.rx_dma_pending.is_empty() {
+                self.sr |= USART_SR_ORE;
+                self.maybe_raise_irq(sys);
+                return;
+            }
+
+            self.rx_dma_pending.push_back(byte);
+            self.sr |= USART_SR_RXNE;
+            self.sr &= !USART_SR_IDLE;
+            self.maybe_raise_irq(sys);
             return;
         }
 
@@ -292,12 +309,10 @@ impl Peripheral for Usart {
 
         match offset {
             0x0000 => {
-                // SR write: per RM, TC can be cleared by writing 0 to bit 6.
-                // TXE is HW-only (set by hardware after DR is shifted out), cannot be forced.
-                // RXNE/IDLE/error classes are handled by SR->DR read sequencing.
-                if (value & USART_SR_TC) == 0 {
-                    self.sr &= !USART_SR_TC;
-                }
+                // SR write does not directly clear status flags in this model.
+                // Receive/error classes are cleared by SR->DR reads.
+                // TC is cleared when a new transmission starts (DR write with TX enabled).
+                let _ = value;
                 self.maybe_raise_irq(sys);
             }
             0x0004 => {
@@ -336,6 +351,7 @@ impl Peripheral for Usart {
                 if old_ue && !new_ue {
                     self.tx_active_since = None;
                     self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                    self.rx_dma_pending.clear();
                 }
 
                 if old_te && !new_te {
@@ -345,6 +361,7 @@ impl Peripheral for Usart {
 
                 if old_re && !new_re {
                     self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                    self.rx_dma_pending.clear();
                 }
 
                 self.maybe_raise_irq(sys);
@@ -368,17 +385,28 @@ impl Peripheral for Usart {
         let mut result = VecDeque::with_capacity(size);
 
         if offset == 0x0004 && (self.cr3 & USART_CR3_DMAR) != 0 && self.rx_enabled() {
-            if let Some(dev) = &self.ext_device {
-                for byte in dev.borrow_mut().read_batch(sys, (), size) {
-                    result.push_back(byte);
-                }
-            } else {
-                for _ in 0..size {
-                    result.push_back(self.dr as u8);
+            while result.len() < size {
+                let Some(byte) = self.rx_dma_pending.pop_front() else {
+                    break;
+                };
+                result.push_back(byte);
+            }
+
+            if result.len() < size {
+                if let Some(dev) = &self.ext_device {
+                    for byte in dev.borrow_mut().read_batch(sys, (), size - result.len()) {
+                        result.push_back(byte);
+                    }
+                } else {
+                    while result.len() < size {
+                        result.push_back(self.dr as u8);
+                    }
                 }
             }
 
-            self.sr &= !USART_SR_RXNE;
+            if self.rx_dma_pending.is_empty() {
+                self.sr &= !USART_SR_RXNE;
+            }
             self.sr_read_since_last_dr_read = false;
         }
 
