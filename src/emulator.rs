@@ -36,6 +36,42 @@ static BUSY_LOOP_REACHED: AtomicBool = AtomicBool::new(false);
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 const BUSY_LOOP_STREAK_THRESHOLD: u32 = 1_000_000;
+const MAX_IRQ_CHAIN_PER_STEP: usize = 32;
+
+fn dispatch_pending_irqs(sys: &System<'_, '_>, reason: &str, max_chain: usize) -> usize {
+    let mut dispatched = 0usize;
+
+    while dispatched < max_chain {
+        let pending_irq = {
+            sys.p.nvic.borrow_mut().take_pending_interrupt(sys)
+        };
+
+        let Some(irq) = pending_irq else {
+            break;
+        };
+
+        if irq == 67 {
+            debug!(
+                "EMULATOR {}: dispatching IRQ 67 (chain_idx={})",
+                reason,
+                dispatched
+            );
+        }
+
+        sys.p.nvic.borrow_mut().run_interrupt(sys, irq);
+        dispatched += 1;
+    }
+
+    if dispatched == max_chain {
+        warn!(
+            "EMULATOR {}: hit max IRQ chain depth {} in a single step",
+            reason,
+            max_chain
+        );
+    }
+
+    dispatched
+}
 
 fn disassemble_instruction(diassembler: &Capstone, uc: &Unicorn<()>, pc: u64) -> String {
     let mut instr = [0; 4];
@@ -181,8 +217,6 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         let mut disk_read_retry_hits: u32 = 0;
         let p = sys.p.clone();
         let d = sys.d.clone();
-        let interrupt_period = args.interrupt_period;
-        let deferred_irq = deferred_irq.clone();
         let gdb_breakpoints_hook = gdb_breakpoints.clone();
         let gdb_bp_hit_hook = gdb_bp_hit.clone();
         sys.uc.borrow_mut().add_code_hook(0, u64::MAX, move |uc, pc, size| {
@@ -597,32 +631,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
 
             let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
             p.step(&sys);
-
-            if n % interrupt_period as u64 == 0 {
-                let pending_irq = {
-                    p.nvic.borrow_mut().take_pending_interrupt(&sys)
-                };
-                if let Some(irq) = pending_irq {
-                    if irq == 67 {
-                        debug!("EMULATOR code_hook: deferred IRQ 67, will dispatch after emu_stop");
-                    }
-                    let deferred_was_empty = {
-                        let mut deferred = deferred_irq.borrow_mut();
-                        if deferred.is_none() {
-                            *deferred = Some(irq);
-                            true
-                        } else {
-                            false
-                        }
-                    };
-                    if !deferred_was_empty {
-                        p.nvic.borrow_mut().set_intr_pending(irq);
-                    }
-                    CONTINUE_EXECUTION.store(true, Ordering::Release);
-                    uc.emu_stop().unwrap();
-                    return;
-                }
-            }
+            let _ = dispatch_pending_irqs(&sys, "code_hook", MAX_IRQ_CHAIN_PER_STEP);
 
             if n & PUMP_EVENT_INST_INTERVAL == 0 {
                 for fb in &framebuffers.sdls {
@@ -639,7 +648,6 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
     {
         let p = sys.p.clone();
         let d = sys.d.clone();
-        let deferred_irq = deferred_irq.clone();
         sys.uc.borrow_mut().add_intr_hook(move |uc, exception| {
             match exception {
                 /*
@@ -673,25 +681,7 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
                     // Return from interrupt
                     let sys = System { uc: RefCell::new(uc), p: p.clone(), d: d.clone() };
                     p.nvic.borrow_mut().return_from_interrupt(&sys);
-                    let pending_irq = {
-                        p.nvic.borrow_mut().take_pending_interrupt(&sys)
-                    };
-                    if let Some(irq) = pending_irq {
-                        let deferred_was_empty = {
-                            let mut deferred = deferred_irq.borrow_mut();
-                            if deferred.is_none() {
-                                *deferred = Some(irq);
-                                true
-                            } else {
-                                false
-                            }
-                        };
-                        if !deferred_was_empty {
-                            p.nvic.borrow_mut().set_intr_pending(irq);
-                        }
-                        CONTINUE_EXECUTION.store(true, Ordering::Release);
-                        uc.emu_stop().unwrap();
-                    }
+                    let _ = dispatch_pending_irqs(&sys, "exception_return", MAX_IRQ_CHAIN_PER_STEP);
                 }
                 3 | 4 => {
                     // EXCP_PREFETCH_ABORT (3) or EXCP_DATA_ABORT (4): fatal fault in emulated CPU.
@@ -845,6 +835,12 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
             }
             sys.p.nvic.borrow_mut().run_interrupt(&sys, irq);
             pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc after deferred irq");
+        }
+
+        // Keep interrupt behavior consistent with the per-instruction path even when
+        // emu_start returns due to step limits or host stop conditions.
+        if dispatch_pending_irqs(&sys, "outer_loop", MAX_IRQ_CHAIN_PER_STEP) > 0 {
+            pc = sys.uc.borrow().reg_read(RegisterARM::PC).expect("failed to get pc after outer-loop irq dispatch");
         }
 
         if CONTINUE_EXECUTION.swap(false, Ordering::AcqRel) {
