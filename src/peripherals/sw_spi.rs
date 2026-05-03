@@ -27,6 +27,8 @@ pub struct SoftwareSpiConfig {
     pub mosi: String,
     #[serde(default)]
     pub cpol: bool,
+    #[serde(default)]
+    pub cpha: bool,
 }
 
 #[derive(Default)]
@@ -47,6 +49,11 @@ pub struct SoftwareSpi {
 }
 
 impl SoftwareSpi {
+    fn shift_miso_bit(&mut self) {
+        self.miso = self.data_miso & 0x80 != 0;
+        self.data_miso <<= 1;
+    }
+
     pub fn register(config: SoftwareSpiConfig, gpio: &mut GpioPorts, ext_devices: &ExtDevices) {
         let cs = config.cs.as_ref().map(|s| Pin::from_str(s));
         let clk = Pin::from_str(&config.clk);
@@ -85,6 +92,11 @@ impl SoftwareSpi {
             self.clk = self.config.cpol;
             self.mosi = false;
             self.miso = false;
+
+            // CPHA=0 requires the first outgoing bit to be valid before the first sampling edge.
+            if !self.config.cpha {
+                self.shift_miso_bit();
+            }
         }
         self.cs = value;
     }
@@ -92,14 +104,25 @@ impl SoftwareSpi {
     pub fn write_clk(&mut self, sys: &System, value: bool) {
         if self.cs { return; }
 
-        let rising = !self.clk && value;
-        let falling = self.clk && !value;
-        let sample_edge = if self.config.cpol { falling } else { rising };
+        let leading = if self.config.cpol {
+            self.clk && !value
+        } else {
+            !self.clk && value
+        };
+        let trailing = if self.config.cpol {
+            !self.clk && value
+        } else {
+            self.clk && !value
+        };
+
+        let sample_edge = if self.config.cpha { trailing } else { leading };
+        let shift_edge = if self.config.cpha { leading } else { trailing };
+
+        if shift_edge {
+            self.shift_miso_bit();
+        }
 
         if sample_edge {
-            self.miso = self.data_miso & 0x80 != 0;
-            self.data_miso <<= 1;
-
             self.data_mosi <<= 1;
             if self.mosi {
                 self.data_mosi |= 1;
