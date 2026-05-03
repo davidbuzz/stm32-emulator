@@ -30,19 +30,14 @@ pub struct Scb {
 
 const CPUID_CORTEX_M4: u32 = 0x410f_c241;
 const AIRCR_VECTKEY: u32 = 0x05fa << 16;
+const HFSR_FORCED: u32 = 1 << 30;
+const CFSR_IBUSERR: u32 = 1 << 8;
+const CFSR_PRECISERR: u32 = 1 << 9;
+const CFSR_BFARVALID: u32 = 1 << 15;
+const CFSR_INVSTATE: u32 = 1 << 17;
 
 impl Scb {
-    pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
-        if name == "SCB" {
-            Some(Box::new(Self::default()))
-        } else {
-            None
-        }
-    }
-}
-
-impl Peripheral for Scb {
-    fn read(&mut self, sys: &System, offset: u32) -> u32 {
+    pub fn read(&mut self, sys: &System, offset: u32) -> u32 {
         let value = match offset {
             0x0000 => CPUID_CORTEX_M4,
             0x0004 => {
@@ -82,7 +77,7 @@ impl Peripheral for Scb {
         value
     }
 
-    fn write(&mut self, sys: &System, offset: u32, value: u32) {
+    pub fn write(&mut self, sys: &System, offset: u32, value: u32) {
         trace!("SCB write offset=0x{:04x} value=0x{:08x}", offset, value);
         match offset {
             0x0004 => {
@@ -115,9 +110,18 @@ impl Peripheral for Scb {
             }
             0x0010 => self.scr = value,
             0x0014 => self.ccr = value,
-            0x0018 => self.shpr[0] = value,
-            0x001c => self.shpr[1] = value,
-            0x0020 => self.shpr[2] = value,
+            0x0018 => {
+                self.shpr[0] = value;
+                sys.p.nvic.borrow_mut().set_system_handler_priority_reg(0, value);
+            }
+            0x001c => {
+                self.shpr[1] = value;
+                sys.p.nvic.borrow_mut().set_system_handler_priority_reg(1, value);
+            }
+            0x0020 => {
+                self.shpr[2] = value;
+                sys.p.nvic.borrow_mut().set_system_handler_priority_reg(2, value);
+            }
             0x0024 => self.shcsr = value,
             0x0028 => self.cfsr &= !value,
             0x002c => self.hfsr &= !value,
@@ -128,5 +132,50 @@ impl Peripheral for Scb {
             0x0088 => self.cpacr = value,
             _ => {}
         }
+    }
+
+    pub fn record_bus_fault(&mut self, addr: Option<u32>, instruction_fetch: bool, escalated: bool) {
+        if instruction_fetch {
+            self.cfsr |= CFSR_IBUSERR;
+        } else {
+            self.cfsr |= CFSR_PRECISERR;
+            if let Some(addr) = addr {
+                self.bfar = addr;
+                self.cfsr |= CFSR_BFARVALID;
+            }
+        }
+
+        if escalated {
+            self.hfsr |= HFSR_FORCED;
+        }
+    }
+
+    pub fn record_usagefault_invstate(&mut self, escalated: bool) {
+        self.cfsr |= CFSR_INVSTATE;
+        if escalated {
+            self.hfsr |= HFSR_FORCED;
+        }
+    }
+}
+
+pub struct ScbWrapper;
+
+impl ScbWrapper {
+    pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
+        if name == "SCB" {
+            Some(Box::new(Self))
+        } else {
+            None
+        }
+    }
+}
+
+impl Peripheral for ScbWrapper {
+    fn read(&mut self, sys: &System, offset: u32) -> u32 {
+        sys.p.scb.borrow_mut().read(sys, offset)
+    }
+
+    fn write(&mut self, sys: &System, offset: u32, value: u32) {
+        sys.p.scb.borrow_mut().write(sys, offset, value)
     }
 }

@@ -79,6 +79,7 @@ pub struct Peripherals {
     debug_peripherals: Vec<PeripheralSlot<GenericPeripheral>>,
     peripherals: Vec<PeripheralSlot<RefCell<Box<dyn Peripheral>>>>,
     pub nvic: RefCell<Nvic>,
+    pub scb: RefCell<Scb>,
     pub core_debug: RefCell<CoreDebug>,
     pub gpio: RefCell<GpioPorts>,
 }
@@ -115,7 +116,7 @@ impl Peripherals {
         let p = None
             .or_else(|| NvicWrapper::new(&name))
             .or_else(||     SysTick::new(&name))
-            .or_else(||         Scb::new(&name))
+            .or_else(||   ScbWrapper::new(&name))
             .or_else(||        Gpio::new(&name))
             .or_else(||       Usart::new(&name, ext_devices, meta))
             .or_else(||        Fsmc::new(&name, ext_devices))

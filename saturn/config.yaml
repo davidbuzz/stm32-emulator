@@ -10,6 +10,7 @@ regions:
     start: 0x08020000
     load: saturn-v4.4.3-pj-v5.bin
     size: 0x80000
+    allow_patches: true
   - name: RAM-CCM
     start: 0x10000000
     size: 0x18000

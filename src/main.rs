@@ -2,6 +2,7 @@
 
 mod config;
 mod emulator;
+mod emulator_trace;
 mod gdb;
 mod util;
 mod peripherals;
@@ -10,7 +11,7 @@ mod system;
 mod framebuffers;
 
 use std::io::{self, prelude::*};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::Relaxed};
 use clap::Parser;
 use anyhow::{Result, Context};
 use env_logger::fmt::WriteStyle;
@@ -87,20 +88,20 @@ impl std::convert::From<Color> for WriteStyle {
     }
 }
 
-static mut VERBOSE: u8 = 0;
-static mut CONSOLE_ONLY: bool = false;
+static VERBOSE: AtomicU8 = AtomicU8::new(0);
+static CONSOLE_ONLY: AtomicBool = AtomicBool::new(false);
 
 pub fn verbose() -> u8 {
-    unsafe { VERBOSE }
+    VERBOSE.load(Relaxed)
 }
 
 pub fn console_only() -> bool {
-    unsafe { CONSOLE_ONLY }
+    CONSOLE_ONLY.load(Relaxed)
 }
 
 fn init_logging(args: &Args) {
-    unsafe { VERBOSE = args.verbose };
-    unsafe { CONSOLE_ONLY = args.console_only };
+    VERBOSE.store(args.verbose, Relaxed);
+    CONSOLE_ONLY.store(args.console_only, Relaxed);
 
     let lf = if args.console_only {
         LevelFilter::Off
@@ -122,8 +123,6 @@ fn init_logging(args: &Args) {
         fn flush(&mut self) -> io::Result<()> { self.0.flush() }
     }
 
-    static mut LAST_NUM_INSTRUCTIONS: u64 = 0;
-
     env_logger::Builder::new()
         .filter_level(lf)
         .write_style(args.color.into())
@@ -131,8 +130,6 @@ fn init_logging(args: &Args) {
         .format(|buf, record| {
             use env_logger::fmt::Color;
             let num_instructions = emulator::NUM_INSTRUCTIONS.load(Relaxed);
-            //let delta_instructions = num_instructions - unsafe { LAST_NUM_INSTRUCTIONS };
-            unsafe { LAST_NUM_INSTRUCTIONS = num_instructions };
             let pc = unsafe { emulator::LAST_INSTRUCTION.0 };
 
             let mut style = buf.style();

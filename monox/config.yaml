@@ -10,6 +10,7 @@ regions:
     start: 0x08000000
     load: fw_v3.5.4.bin
     size: 0x80000
+    allow_patches: true
   - name: RAM-CCM
     start: 0x10000000
     size: 0x18000

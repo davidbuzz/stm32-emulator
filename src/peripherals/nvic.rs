@@ -138,6 +138,12 @@ impl Nvic {
         }
     }
 
+    pub fn set_system_handler_priority_reg(&mut self, index: usize, value: u32) {
+        if index < self.shpr.len() {
+            self.shpr[index] = value;
+        }
+    }
+
     pub fn next_pending_intr(&self) -> Option<i32> {
         self.next_dispatchable_bit().map(|bit| (bit as i32) - IRQ_OFFSET)
     }
@@ -331,13 +337,14 @@ impl Nvic {
     }
 
     /// Signal a fault and determine if it should escalate to HardFault
-    pub fn signal_fault(&mut self, fault_type: &str) {
+    pub fn signal_fault(&mut self, fault_type: &str) -> bool {
         debug!("NVIC: {} signaled (escalate_to_hardfault={})", fault_type, self.should_escalate_to_hardfault(fault_type));
         
         if self.should_escalate_to_hardfault(fault_type) {
             self.hardfault_pending = true;
             // HardFault is non-maskable and takes highest priority (vector 3)
             self.set_intr_pending(-3); // HardFault IRQ number
+            true
         } else {
             match fault_type {
                 "MemManage" => {
@@ -357,6 +364,8 @@ impl Nvic {
                 }
                 _ => {}
             }
+
+            false
         }
     }
 

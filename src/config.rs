@@ -2,12 +2,23 @@
 
 use serde::Deserialize;
 
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RegionAccess {
+   R,
+   Rx,
+   Rw,
+   Rwx,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Region {
    pub name: String,
    pub start: u32,
    pub size: u32,
    pub load: Option<String>,
+   pub access: Option<RegionAccess>,
+   pub allow_patches: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

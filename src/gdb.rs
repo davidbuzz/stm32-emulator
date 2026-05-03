@@ -38,6 +38,8 @@ fn thumb(pc: u64) -> u64 {
     pc | 1
 }
 
+const XPSR_T_BIT: u32 = 1 << 24;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ExecMode {
     Continue,
@@ -114,7 +116,7 @@ impl GdbTarget {
             let raw = self.uc;
             let uc: &mut Unicorn<'static, ()> = unsafe { &mut *raw };
 
-            let mut sys = System { uc: RefCell::new(uc), p, d };
+            let sys = System { uc: RefCell::new(uc), p, d };
 
             let selected = sys.p.nvic.borrow_mut().take_pending_interrupt(&sys);
             if let Some(sel) = selected {
@@ -228,12 +230,16 @@ impl SingleThreadBase for GdbTarget {
         // Report PC without thumb bit
         regs.pc = uc.reg_read(RegisterARM::PC)
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_read pc: {e:?}")))? as u32 & !1;
-        regs.cpsr = uc.reg_read(RegisterARM::CPSR)
-            .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_read cpsr: {e:?}")))? as u32;
+        regs.cpsr = uc.reg_read(RegisterARM::XPSR)
+            .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_read xpsr: {e:?}")))? as u32;
         Ok(())
     }
 
     fn write_registers(&mut self, regs: &ArmCoreRegs) -> TargetResult<(), Self> {
+        if (regs.cpsr & XPSR_T_BIT) == 0 {
+            return Err(TargetError::NonFatal);
+        }
+
         let raw = self.uc;
         let uc: &mut Unicorn<'static, ()> = unsafe { &mut *raw };
         for (i, &reg) in ARM_REGS.iter().enumerate() {
@@ -244,21 +250,18 @@ impl SingleThreadBase for GdbTarget {
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write sp: {e:?}")))?;
         uc.reg_write(RegisterARM::LR, regs.lr as u64)
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write lr: {e:?}")))?;
-        uc.reg_write(RegisterARM::PC, regs.pc as u64)
+        uc.reg_write(RegisterARM::PC, thumb(regs.pc as u64))
             .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write pc: {e:?}")))?;
-        self.current_pc = regs.pc as u64;
-        uc.reg_write(RegisterARM::CPSR, regs.cpsr as u64)
-            .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write cpsr: {e:?}")))?;
+        self.current_pc = thumb(regs.pc as u64);
+        uc.reg_write(RegisterARM::XPSR, (regs.cpsr | XPSR_T_BIT) as u64)
+            .map_err(|e| TargetError::Fatal(anyhow::anyhow!("reg_write xpsr: {e:?}")))?;
         Ok(())
     }
 
     fn read_addrs(&mut self, start_addr: u32, data: &mut [u8]) -> TargetResult<usize, Self> {
         let raw = self.uc;
         let uc: &mut Unicorn<'static, ()> = unsafe { &mut *raw };
-        // Best-effort: read as much as Unicorn allows; unmapped regions return 0s.
-        if uc.mem_read(start_addr as u64, data).is_err() {
-            data.fill(0);
-        }
+        uc.mem_read(start_addr as u64, data).map_err(|_| TargetError::NonFatal)?;
         Ok(data.len())
     }
 

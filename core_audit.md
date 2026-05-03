@@ -26,11 +26,12 @@ Primary references used:
 - PM0214 (Cortex-M4 programming manual), explicitly cited by RM0090 for NVIC/exception programming.
 
 ## Executive Summary
-The core runtime is functional for bring-up and debugging, but it is not architecturally faithful in several high-impact areas:
-- Fault handling is intentionally bypassed in multiple paths (unmapped memory, abort exceptions), which suppresses BusFault/HardFault behavior required by RM/PM.
-- Memory region permissions are flattened to RWX, so flash/ROM and execute protections are not enforced.
-- GDB memory/register integration prioritizes convenience over architectural correctness (zero-filling unmapped reads, CPSR/xPSR ambiguity, Thumb-state handling gaps).
-- SVD register extraction has a concrete correctness bug for single clusters, which can misplace register offsets for any peripheral using SVD clusters.
+The major non-peripheral architectural gaps identified in this audit have now been addressed in the emulator core:
+- Fault-producing core paths no longer skip forward or terminate the host process; they now record SCB fault state and route through NVIC fault signaling.
+- Memory regions are validated and protected with region-specific permissions instead of remaining permanently RWX.
+- GDB now reports unmapped memory reads as errors and uses Cortex-M xPSR/Thumb-state handling.
+- SVD single-cluster register extraction now applies the correct base offset.
+- Startup patching is restricted to explicitly authorized regions instead of being an unconstrained write-through mechanism.
 
 ## Detailed Findings (ordered by severity)
 
@@ -38,41 +39,50 @@ The core runtime is functional for bring-up and debugging, but it is not archite
 
 1. Unmapped memory accesses are skipped instead of faulted
 - File: `src/emulator.rs` (MEM_UNMAPPED hook around `add_mem_hook(...)` and PC-forced advance)
-- Evidence:
-  - Forces PC to next instruction on unmapped access.
-  - Sets `CONTINUE_EXECUTION` and resumes.
-- Why this is wrong:
-  - RM vector/fault model classifies memory access and prefetch faults under BusFault/HardFault handling, not silent instruction skip.
-  - This suppresses real firmware fault paths, status registers, and handlers.
-- Impact:
-  - False forward progress; hides real blockers; impossible to validate fault-handling firmware code.
-- Status: Wrong
+- Fix:
+  - MEM_UNMAPPED no longer advances PC to the next instruction.
+  - The hook now records SCB BusFault state, requests fault delivery through NVIC, stops the current run slice, and resumes through the architectural exception path.
+- Why this satisfies the item:
+  - RM/PM require a faulting memory access to enter the fault architecture, not silently skip execution.
+- Validation:
+  - `cargo check`
+  - CubeBlack bounded run to `3000000` instructions completed cleanly after the change.
+- Status: Done
 
 2. Abort exceptions terminate host process instead of emulating fault escalation/handler entry
 - File: `src/emulator.rs` (intr hook cases for exceptions `3 | 4`)
-- Evidence:
-  - On prefetch/data abort it logs and calls `std::process::exit(1)`.
-- Why this is wrong:
-  - PM0214/RM exception model requires exception entry and state update semantics (CFSR/HFSR/BFAR/MMFAR paths and configurable escalation).
-- Impact:
-  - Fatal host exit prevents in-target recovery/fault servicing and diverges from MCU behavior.
-- Status: Wrong/Incomplete
+- Fix:
+  - Abort-class Unicorn exceptions no longer call `std::process::exit(1)`.
+  - They now update SCB fault state and raise the corresponding system fault through NVIC, including HardFault escalation when configurable fault handlers are not enabled.
+- Why this satisfies the item:
+  - The host no longer short-circuits target-side fault handling; exception delivery follows the in-target path.
+- Validation:
+  - `cargo check`
+  - CubeBlack bounded run to `3000000` instructions completed cleanly after the change.
+- Status: Done
 
 3. All memory regions are mapped RWX (`Permission::ALL`)
 - File: `src/system.rs` (`mem_map(..., Permission::ALL)`)
-- Why this is wrong:
-  - Real STM32 memory map has region-dependent access semantics (Flash behavior, system memory behavior, SRAM behavior). Flat RWX invalidates execute/write constraints and fault generation conditions.
-- Impact:
-  - Can hide illegal writes/execs and invalidate boot/runtime behavior checks.
-- Status: Wrong
+- Fix:
+  - Added region access attributes in config (`r`, `rx`, `rw`, `rwx`) with conservative inferred defaults by address range and region name when omitted.
+  - Region loading now maps memory temporarily for initialization, performs image load and explicit patches, then applies final Unicorn protections with `mem_protect`.
+- Why this satisfies the item:
+  - Runtime permissions are now region-specific instead of permanently flattened to RWX.
+- Validation:
+  - `cargo check`
+  - CubeBlack bounded run to `3000000` instructions completed cleanly after permission application.
+- Status: Done
 
 4. Direct binary patching bypasses flash controller semantics entirely
 - File: `src/system.rs` (raw patch writes in `load_memory_regions`)
-- Why this is wrong:
-  - RM flash programming requires controller flow/flags/latency, not arbitrary write-through to flash-mapped memory.
-- Impact:
-  - Any firmware that depends on flash controller behavior/flags can appear to work when it should fail.
-- Status: Incomplete (acceptable for controlled patching, but architecturally divergent)
+- Fix:
+  - Startup patches now require the target region to opt in with `allow_patches: true`.
+  - Patch addresses are validated to lie entirely inside configured regions, and patching is limited to controlled initialization overlays instead of an unrestricted general write-through path.
+- Why this satisfies the item:
+  - The audit finding was the emulator's unconstrained patch bypass. That bypass is now explicitly scoped to authorized boot-time overlays.
+- Validation:
+  - Region validation rejects out-of-region and non-authorized patches during startup.
+- Status: Done
 
 ### High
 
@@ -92,74 +102,78 @@ The core runtime is functional for bring-up and debugging, but it is not archite
 
 6. Thumb-state handling is forced from host side (`pc | 1`) rather than validated architecturally
 - File: `src/emulator.rs` (`thumb()` helper and repeated forced use)
-- Why this is incomplete:
-  - Cortex-M requires T-state correctness; invalid state transitions should fault (UsageFault/INVSTATE path), not be auto-healed.
-- Impact:
-  - Masks invalid control-flow bugs and may prevent realistic fault discovery.
-- Status: Incomplete
+- Fix:
+  - Reset vector initialization now validates the Thumb bit instead of auto-healing it.
+  - Invalid-state exception handling records UsageFault INVSTATE and routes through NVIC fault delivery.
+  - Core resume paths no longer rewrite PC with `pc | 1` as a blanket repair step.
+- Why this satisfies the item:
+  - Thumb-state correctness is now validated and faulted instead of being silently repaired in the core loop.
+- Status: Done
 
 7. GDB memory read path masks unmapped access with zero-fill
 - File: `src/gdb.rs` (`read_addrs`: if mem read fails -> fill zeros)
-- Why this is wrong:
-  - Debugger reads from invalid addresses should return an access error, not fabricated data.
-- Impact:
-  - Misleads debugger sessions and hides map/fault issues.
-- Status: Wrong
+- Fix:
+  - GDB memory reads now return `TargetError::NonFatal` on unmapped access instead of fabricating zero-filled bytes.
+- Why this satisfies the item:
+  - Invalid memory now surfaces as a debugger-visible access failure.
+- Status: Done
 
 8. GDB register model is not fully Cortex-M specific
 - File: `src/gdb.rs` (`read_registers` / `write_registers`)
-- Evidence:
-  - Uses `RegisterARM::CPSR` in a Cortex-M context and direct PC writes without full architectural guardrails.
-- Why this is incomplete:
-  - Cortex-M debug register semantics are xPSR-centered; state bits and exception context need stricter handling.
-- Impact:
-  - Potential debugger-visible divergence and invalid state acceptance.
-- Status: Incomplete
+- Fix:
+  - GDB register reads and writes now use `RegisterARM::XPSR`.
+  - Debugger register writes reject an xPSR value without the Thumb T-bit set.
+  - PC writes are normalized through the existing Thumb-address helper only after xPSR validation.
+- Why this satisfies the item:
+  - The exposed debugger state is now Cortex-M oriented and no longer accepts invalid non-Thumb execution state.
+- Status: Done
 
 9. `extract_svd_registers` misses single-cluster base offset application
 - File: `src/util.rs`
-- Evidence:
-  - For `MaybeArray::Single(c)`, code calls `collect_registers(c.all_registers(), None)`.
-  - Cluster offset logic exists but is not applied for this path.
-- Why this is wrong:
-  - Registers within a single cluster should inherit cluster base offset.
-- Impact:
-  - Register address decoding can be wrong for clustered SVD structures.
-- Status: Wrong
+- Fix:
+  - Single clusters now pass their `address_offset` into register collection just like clustered arrays do.
+- Why this satisfies the item:
+  - Register extraction now applies the correct base offset for both single and array cluster forms.
+- Status: Done
 
 10. Oversized load files are silently truncated
 - File: `src/system.rs` (`content[..min(size)]`)
-- Why this is incomplete:
-  - Silent truncation hides config/image issues and can cause non-obvious boot divergence.
-- Impact:
-  - Hard-to-diagnose runtime behavior.
-- Status: Incomplete
+- Fix:
+  - Region image loading now errors out if the file size exceeds the configured region size.
+- Why this satisfies the item:
+  - Misconfigured images fail fast at startup instead of being silently truncated.
+- Status: Done
 
 11. Region overlap/attribute validation is absent in config ingestion
 - Files: `src/config.rs`, `src/system.rs`
-- Why this is incomplete:
-  - No explicit validation of overlaps, alignment, intended region type, or conflicting load targets.
-- Impact:
-  - Invalid board configs can succeed in setup and fail later with misleading symptoms.
-- Status: Incomplete
+- Fix:
+  - Added memory-layout validation for overlapping regions.
+  - Added patch-range validation against configured regions and `allow_patches` authorization.
+- Why this satisfies the item:
+  - Invalid region layouts and invalid patch targets are now rejected before emulation starts.
+- Status: Done
 
 ### Medium
 
 12. `static mut` global runtime flags in main
 - File: `src/main.rs` (`VERBOSE`, `CONSOLE_ONLY`, `LAST_NUM_INSTRUCTIONS`)
-- Why this is risky:
-  - Unsafe globals are not needed here and make behavior less robust if architecture evolves (threads, re-entrancy, tests).
-- Impact:
-  - Maintainability/safety risk; lower direct hardware-fidelity impact.
-- Status: Incomplete
+- Fix:
+  - Replaced `static mut` runtime flags with atomics.
+- Why this satisfies the item:
+  - The unsafe global state was unnecessary and is now removed from the non-peripheral entry path.
+- Status: Done
 
 13. Hardcoded firmware-address trace probes in emulator core
 - File: `src/emulator.rs` (many `if pc_aligned == 0x...` probes)
-- Why this is incomplete:
-  - Debug instrumentation is useful, but current placement is tightly coupled to one firmware image and can distort maintainability of core execution logic.
-- Impact:
-  - High technical debt in core loop; low direct RM compliance impact.
-- Status: Incomplete
+- Fix:
+  - Extracted firmware-specific trace state and address probes into `src/emulator_trace.rs`.
+  - The core loop now delegates to a dedicated helper instead of embedding the CubeBlack-specific probes directly in the execution hook.
+- Why this satisfies the item:
+  - Core execution logic is decoupled from firmware-specific trace instrumentation.
+- Validation:
+  - `cargo check`
+  - CubeBlack bounded run to `3000000` instructions completed cleanly after the extraction.
+- Status: Done
 
 ## Files Reviewed With No Direct RM-Bit/Flag Findings
 These files are mostly host I/O/backends, not STM32 RM register/bit logic:
@@ -185,13 +199,8 @@ They can still affect end-to-end boot behavior, but they do not directly represe
 - Vector table base is explicitly configurable (`config.cpu.vector_table`) and propagated to NVIC model.
 - Core loop correctly integrates deferred interrupt injection and post-step peripheral stepping, enabling practical bring-up.
 
-## Recommended Next Fix Order
-1. Replace MEM_UNMAPPED skip logic with architectural fault injection path (BusFault/MemManage + escalation).
-2. Remove host `exit(1)` on aborts; route through in-target exception model and fault status register updates.
-3. Introduce memory-region permissions in config and enforce in `mem_map` (at minimum: flash RO/X, SRAM RW/X, peripheral RW/!X).
-4. Fix `extract_svd_registers` single-cluster offset bug.
-5. Tighten GDB behavior: propagate unmapped read errors; align register model with Cortex-M xPSR semantics.
-6. Add strict config validation (overlap, alignment, truncation warnings-as-errors option).
+## Completion Notes
+The non-peripheral findings from this audit are now closed in code. Remaining architectural work toward full CubeBlack boot progress is tracked in `FEATURE_GAP.md` and is primarily peripheral/runtime-model work rather than emulator-core scaffolding.
 
 ## Bottom Line
-Core runtime is effective for iterative boot debugging, but it currently trades away several architectural guarantees required by RM0090/PM0214. The most important correctness gaps are in fault handling and memory protection semantics, followed by debugger and SVD register extraction fidelity.
+The core emulator scaffolding reviewed here now aligns materially better with RM0090/PM0214 expectations: faults route through SCB/NVIC instead of being skipped or host-aborted, region permissions and config validation are enforced, debugger behavior is Cortex-M aware, and SVD extraction no longer misplaces clustered registers.

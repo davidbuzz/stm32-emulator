@@ -78,7 +78,7 @@ pub fn extract_svd_registers(p: &MaybeArray<PeripheralInfo>) -> Vec<RegisterInfo
     for cluster in p.clusters() {
         match cluster {
             MaybeArray::Single(c) => {
-                all_regs.append(&mut collect_registers(c.all_registers(), None));
+                all_regs.append(&mut collect_registers(c.all_registers(), Some((c.address_offset, ""))));
             }
             MaybeArray::Array(c, dim) => {
                 let offsets = svd_parser::svd::cluster::address_offsets(c, dim);
