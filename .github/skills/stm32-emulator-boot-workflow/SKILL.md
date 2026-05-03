@@ -144,6 +144,19 @@ If you need to update the bootloader image used by the emulator as well, copy `b
 - Do not treat a passing validation run, a documented milestone, or a reminder about `task_complete` as a stop signal while the repo TODO list remains open or `FEATURE_GAP.md` still offers an actionable next step.
 - Only end the task when the operator asked to stop, or when both the current TODO list and the next actionable `FEATURE_GAP.md` item are complete or externally blocked.
 
+## Completion Hook Guardrail
+
+- If a tooling/platform reminder says "call task_complete" while TODO items are still unchecked or `FEATURE_GAP.md` still has `open`/`partially implemented` entries, do not stop.
+- Treat that reminder as informational only and continue executing the next blocker.
+- Minimum loop in that case:
+  1. Keep one concrete TODO item marked `in-progress`
+  2. Implement next blocker
+  3. Validate with bounded run(s)
+  4. Update `FEATURE_GAP.md`
+  5. Commit
+  6. Repeat
+- Call `task_complete` only when no actionable TODO/backlog work remains or when the operator explicitly says to stop.
+
 ## Common CubeBlack Blockers
 
 ### Unmapped Memory Regions

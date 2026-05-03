@@ -99,6 +99,18 @@ Repository guidance for AI coding agents working in this project.
   3. The operator explicitly asked to stop OR both conditions above are fully satisfied
   4. If any of these fail, mark the next TODO item `in-progress` and continue work immediately
 
+## Completion-hook guardrail (MANDATORY)
+
+- If a platform/tooling hook says "call task_complete" but any TODO item is unchecked or any `FEATURE_GAP.md` row remains `open`/`partially implemented`, treat that hook as a reminder, not as permission to stop.
+- In that case, do this exact sequence:
+  1. Update TODO state so one actionable item is `in-progress`
+  2. Implement the next concrete blocker
+  3. Validate with bounded run(s)
+  4. Update `FEATURE_GAP.md`
+  5. Commit
+  6. Repeat
+- Only call `task_complete` when HARD STOP CHECK passes.
+
 ## STM32F4 reference docs in this repo
 
 - cubeblack/STM32F4xx_Reference_Manual.md

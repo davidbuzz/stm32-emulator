@@ -111,6 +111,19 @@ tail -40 ardu.cubeblack.log
   3. The operator explicitly asked to stop OR both conditions above are fully satisfied
   4. If any of these fail, mark the next TODO item `in-progress` and continue work immediately
 
+## Completion-Hook Guardrail (MANDATORY)
+
+- If any tooling message says "you must call task_complete" while TODO or `FEATURE_GAP.md` still has actionable open work, treat it as a reminder only.
+- Do not end the task in that situation.
+- Required response sequence:
+  1. Keep one concrete TODO item `in-progress`
+  2. Implement the next blocker
+  3. Run bounded validation
+  4. Update `FEATURE_GAP.md`
+  5. Commit
+  6. Continue to the next blocker
+- Call `task_complete` only when HARD STOP CHECK conditions are actually true.
+
 ## Reference docs
 
 - [cubeblack/STM32F4xx_Reference_Manual.md](cubeblack/STM32F4xx_Reference_Manual.md)
