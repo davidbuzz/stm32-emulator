@@ -62,6 +62,9 @@ impl SysTick {
                 self.countflag = true;
             } else {
                 self.current = self.current.saturating_sub(1);
+                if self.current == 0 {
+                    self.countflag = true;
+                }
             }
             delta -= 1;
         }
@@ -85,6 +88,10 @@ impl SysTick {
 }
 
 impl Peripheral for SysTick {
+    fn step(&mut self, _sys: &System) {
+        self.update_counter();
+    }
+
     fn read(&mut self, _sys: &System, offset: u32) -> u32 {
         self.update_counter();
 
