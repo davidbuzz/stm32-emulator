@@ -45,6 +45,8 @@ pub struct Spi {
     pub rxne: bool,           // RXNE: receive data available
     pub ovr: bool,
     pub modf: bool,
+    ovr_dr_read_pending_sr_clear: bool,
+    modf_sr_read_pending_cr1_clear: bool,
     pub ext_device: Option<Rc<RefCell<dyn ExtDevice<(), u8>>>>,
     /// Pending RX DMA destination addresses collected during RX DMA bursts.
     /// TX DMA consumes these addresses and patches RAM with real MISO bytes.
@@ -86,6 +88,7 @@ impl Spi {
         let nss_low = (self.cr1 & SPI_CR1_SSI) == 0;
         if master && hw_nss && nss_low {
             self.modf = true;
+            self.modf_sr_read_pending_cr1_clear = false;
             // Hardware clears SPE on mode fault.
             self.cr1 &= !SPI_CR1_SPE;
         }
@@ -197,14 +200,23 @@ impl Peripheral for Spi {
             }
             0x0004 => self.cr2,
             0x0008 => {
+                if self.ovr && self.ovr_dr_read_pending_sr_clear {
+                    self.ovr = false;
+                    self.ovr_dr_read_pending_sr_clear = false;
+                }
+                if self.modf {
+                    self.modf_sr_read_pending_cr1_clear = true;
+                }
                 self.build_sr()
             }
             0x000C => {
                 // DR register: reading clears RXNE
                 let v = self.rx_buffer;
                 self.rxne = false;
-                // Simplified OVR clear path for firmware polling loops.
-                self.ovr = false;
+                if self.ovr {
+                    // RM sequence: OVR clears on DR read then SR read.
+                    self.ovr_dr_read_pending_sr_clear = true;
+                }
                 if self.is_16bits() {
                     trace!("{} read={:04x?}", self.name, v as u16);
                 } else {
@@ -222,6 +234,11 @@ impl Peripheral for Spi {
             0x0000 => {
                 // CR1 register
                 self.cr1 = value;
+                if self.modf && self.modf_sr_read_pending_cr1_clear {
+                    // RM sequence: MODF clears on SR read then CR1 write.
+                    self.modf = false;
+                    self.modf_sr_read_pending_cr1_clear = false;
+                }
                 self.check_mode_fault();
                 self.maybe_raise_irq(sys);
             }
