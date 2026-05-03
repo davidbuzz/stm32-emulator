@@ -110,15 +110,28 @@ impl Peripheral for Exti {
 
 /// Called by GPIO emulation when a pin's input level transitions.
 /// `port` is 0=A, 1=B, ... 10=K.  `pin` is 0..15.
-/// Only fires EXTI if the EXTI line is configured to that port's SYSCFG channel —
-/// in this simplified model we route all GPIO write callbacks through without
-/// checking SYSCFG EXTICR, since CubeBlack wires each significant pin to a unique
-/// port anyway and getting the exact SYSCFG routing wrong only matters for
-/// multi-port-on-same-line cases.
+/// Only fires EXTI if the EXTI line is configured to that port's SYSCFG EXTICR mux.
 pub fn gpio_pin_transition(sys: &System, _port: u8, pin: u8, prev: bool, curr: bool) {
+    // GPIO-driven EXTI routing exists only for lines 0..15.
+    if pin > 15 {
+        return;
+    }
+
     let rising  = !prev && curr;
     let falling =  prev && !curr;
     if !rising && !falling {
+        return;
+    }
+
+    let port = _port;
+
+    // SYSCFG EXTICR1..4 at 0x4001_3808..0x4001_3814; each line uses a 4-bit port mux.
+    let syscfg_base = 0x4001_3800u32;
+    let exticr_offset = 0x08 + ((pin / 4) as u32) * 4;
+    let exticr = sys.p.read(sys, syscfg_base + exticr_offset, 4);
+    let shift = ((pin % 4) * 4) as u32;
+    let mapped_port = ((exticr >> shift) & 0x0f) as u8;
+    if mapped_port != port {
         return;
     }
 
