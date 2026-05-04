@@ -562,8 +562,15 @@ impl Peripheral for Usart {
             }
             0x0014 => {
                 // Persist CR3 state; DMAT/DMAR are consumed in DMA hooks.
+                let old_dmar = (self.cr3 & USART_CR3_DMAR) != 0;
                 self.cr3 = value;
                 self.normalize_mode_registers();
+
+                let new_dmar = (self.cr3 & USART_CR3_DMAR) != 0;
+                if old_dmar && !new_dmar {
+                    self.rx_dma_pending.clear();
+                    self.sr &= !USART_SR_RXNE;
+                }
 
                 if !self.rx_enabled() {
                     self.rx_active_since = None;
