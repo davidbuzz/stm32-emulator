@@ -903,6 +903,7 @@ impl Peripheral for OtgFs {
                     // messages accumulate into a single line naturally.
                     shared.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
                     shared.mark_in_endpoint_interrupt(ep, DIEPINT_XFRC);
+                    shared.reset_tx_fifo_level(ep);
                     shared.diepctl[ep] &= !DIEPCTL_EPENA;
                     shared.ep_in_transfer_pending[ep] = false;
                     shared.ep_txfe_was_fired[ep] = false;
@@ -991,6 +992,14 @@ pub fn fifo_write(ep: usize, word: u32) {
     }
     OTG_FS_SHARED.with(|shared| {
         let mut s = shared.borrow_mut();
+
+        if ep < EP_COUNT {
+            // Each 32-bit write consumes one FIFO word.
+            s.out_tx_fifo_level[ep] = s.out_tx_fifo_level[ep].saturating_sub(1);
+            // Once data is queued, TX FIFO is no longer "empty" for TXFE purposes.
+            s.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+        }
+
         // In console-only mode, stream EP1 bytes immediately so output is visible
         // even if firmware has not emitted a newline-terminated record yet.
         let bytes = word.to_le_bytes();
