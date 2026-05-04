@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_FILE="$ROOT_DIR/cubeblack/ardu.cubeblack.log"
 EMULATOR="$ROOT_DIR/target/release/stm32-emulator"
-TIMEOUT_SECONDS=20
+TIMEOUT_SECONDS=35
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -18,9 +18,9 @@ fi
 
 set +e
 if command -v stdbuf >/dev/null 2>&1; then
-	timeout -k 1 "$TIMEOUT_SECONDS" stdbuf -oL -eL "$EMULATOR" "$ROOT_DIR/cubeblack/config.yaml" -v --max-instructions 23000000 2>&1 | tee "$LOG_FILE"
+	timeout -k 1 "$TIMEOUT_SECONDS" stdbuf -oL -eL "$EMULATOR" "$ROOT_DIR/cubeblack/config.yaml" -v --max-instructions 27000000 2>&1 | tee "$LOG_FILE"
 else
-	timeout -k 1 "$TIMEOUT_SECONDS" "$EMULATOR" "$ROOT_DIR/cubeblack/config.yaml" -v --max-instructions 23000000 2>&1 | tee "$LOG_FILE"
+	timeout -k 1 "$TIMEOUT_SECONDS" "$EMULATOR" "$ROOT_DIR/cubeblack/config.yaml" -v --max-instructions 27000000 2>&1 | tee "$LOG_FILE"
 fi
 run_status=${PIPESTATUS[0]}
 set -e
