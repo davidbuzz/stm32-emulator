@@ -368,6 +368,10 @@ impl Sdio {
     fn fifocnt_words(&self) -> u32 {
         (self.fifo_data.len() as u32) / 4
     }
+
+    fn pending_is_write_transfer(&self) -> bool {
+        matches!(self.pending_data_cmd, Some(CMD_WRITE_BLOCK | CMD_WRITE_MULTIPLE_BLOCK))
+    }
 }
 
 impl Peripheral for Sdio {
@@ -386,7 +390,11 @@ impl Peripheral for Sdio {
         if self.data_timeout_delay > 0 {
             self.data_timeout_delay -= 1;
             if self.data_timeout_delay == 0 && self.mask != 0 {
-                self.sta |= STA_DTIMEOUT;
+                if self.pending_is_write_transfer() {
+                    self.sta |= STA_DCRCFAIL;
+                } else {
+                    self.sta |= STA_DTIMEOUT;
+                }
                 sys.p.nvic.borrow_mut().set_intr_pending(SDIO_IRQ_NUMBER);
             }
         }
@@ -440,7 +448,9 @@ impl Peripheral for Sdio {
                             self.sta |= STA_CMDSENT;
                             self.maybe_raise_irq(_sys);
                         } else {
-                            self.sta |= STA_CTIMEOUT;
+                            // Unknown command with expected response: model a CRC-fail
+                            // response path before eventual ejection timeout behavior.
+                            self.sta |= STA_CCRCFAIL;
                             if !self.is_ejected {
                                 self.failed_retries = self.failed_retries.saturating_add(1);
                             }
@@ -471,6 +481,15 @@ impl Peripheral for Sdio {
                 self.dctrl = value;
                 self.sta &= !(STA_DTIMEOUT | STA_DATAEND | STA_STBITERR | STA_RXOVERR | STA_TXUNDERR | STA_DCRCFAIL);
                 if (value & DCTRL_DTEN) != 0 {
+                    // Malformed write transfer setup: signal data CRC failure.
+                    if self.pending_is_write_transfer() && (self.dlen == 0 || (self.dlen % 512) != 0) {
+                        self.sta |= STA_DCRCFAIL;
+                        self.data_transfer_pending = false;
+                        self.data_timeout_delay = 0;
+                        self.maybe_raise_irq(_sys);
+                        return;
+                    }
+
                     // Data transfer enabled: prepare synthetic payload and complete when DMA consumes it.
                     self.prime_fifo_for_data_transfer();
                     self.service_sdio_dma_reads(_sys);
