@@ -186,10 +186,19 @@ impl Nvic {
     }
 
     fn preempt_priority_value(&self, raw_prio: u8) -> u8 {
-        // Coarse PRIGROUP handling: fold lower subpriority bits out of
-        // arbitration comparisons so AIRCR.PRIGROUP influences preemption.
+        self.priority_fields(raw_prio).0
+    }
+
+    fn priority_fields(&self, raw_prio: u8) -> (u8, u8) {
+        // PRIGROUP: split priority byte into preemption class and subpriority.
         let sub_bits = self.priority_group.min(7);
-        raw_prio >> sub_bits
+        let preempt = raw_prio >> sub_bits;
+        let sub = if sub_bits == 0 {
+            0
+        } else {
+            raw_prio & ((1u8 << sub_bits) - 1)
+        };
+        (preempt, sub)
     }
 
     fn is_external_irq_dispatchable(&self, irq: i32, basepri: u32, current_active_prio: Option<u8>) -> bool {
@@ -213,7 +222,8 @@ impl Nvic {
 
     fn take_next_external_irq(&mut self, basepri: u32, current_active_prio: Option<u8>) -> Option<i32> {
         let mut best_irq: Option<i32> = None;
-        let mut best_prio: u8 = u8::MAX;
+        let mut best_preempt: u8 = u8::MAX;
+        let mut best_sub: u8 = u8::MAX;
         let irq50_pending = self.is_intr_pending(50);
         let irq67_pending = self.is_intr_pending(67);
 
@@ -232,13 +242,17 @@ impl Nvic {
                 continue;
             }
 
-            let prio = self.preempt_priority_value(self.irq_priority_value(irq_i32));
+            let (preempt, sub) = self.priority_fields(self.irq_priority_value(irq_i32));
             let better_tie_break = match best_irq {
                 None => true,
                 Some(existing) => irq_i32 < existing,
             };
-            if prio < best_prio || (prio == best_prio && better_tie_break) {
-                best_prio = prio;
+            if preempt < best_preempt
+                || (preempt == best_preempt && sub < best_sub)
+                || (preempt == best_preempt && sub == best_sub && better_tie_break)
+            {
+                best_preempt = preempt;
+                best_sub = sub;
                 best_irq = Some(irq_i32);
             }
         }
