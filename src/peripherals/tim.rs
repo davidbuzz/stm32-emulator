@@ -284,13 +284,14 @@ impl Tim {
             }
         };
 
-        // CCR1 – DIER bit 1, SR bit 1, CCER CC1E bit 0
-        if (self.ccer & (1 << 0)) != 0
-            && (self.dier & (1 << 1)) != 0
-            && (self.sr & (1 << 1)) == 0
-            && check_cc(old_cnt, self.cnt, self.ccr1)
+        // CCR1 – DIER bit 1, SR bit 1
+        // Note: CCER.CC1E (output enable) is NOT required for interrupt generation.
+        // Compare interrupt fires based on DIER.CC1IE and SR.CC1F only.
+        if (self.dier & (1 << 1)) != 0  // CC1IE must be set
+            && (self.sr & (1 << 1)) == 0    // CC1F must not already be set
+            && check_cc(old_cnt, self.cnt, self.ccr1)  // counter must cross CCR1
         {
-            self.sr |= 1 << 1;
+            self.sr |= 1 << 1;  // set CC1F flag
             let irq = self.cc_irq_number().or_else(|| self.irq_number());
             if let Some(irq) = irq {
                 debug!("{} CC1 compare fired cnt=0x{:08x} ccr1=0x{:08x} -> IRQ {}", self.name, self.cnt, self.ccr1, irq);
@@ -300,13 +301,13 @@ impl Tim {
             if (self.dier & (1 << 9)) != 0 {
                 self.trigger_cc_dma_request(sys, 1);
             }
-        } else if (self.ccer & (1 << 0)) != 0 && (self.sr & (1 << 1)) != 0 && check_cc(old_cnt, self.cnt, self.ccr1) {
+        } else if (self.sr & (1 << 1)) != 0 && check_cc(old_cnt, self.cnt, self.ccr1) {
             // CC1 overflow: flag already set, but counter crossed threshold again
             self.sr |= 1 << 9; // set CC1OF
         }
-        // CCR2 – DIER bit 2, SR bit 2, CCER CC2E bit 4
-        if (self.ccer & (1 << 4)) != 0
-            && (self.dier & (1 << 2)) != 0
+        // CCR2 – DIER bit 2, SR bit 2
+        // Note: CCER.CC2E (output enable) is NOT required for interrupt generation.
+        if (self.dier & (1 << 2)) != 0
             && (self.sr & (1 << 2)) == 0
             && check_cc(old_cnt, self.cnt, self.ccr2)
         {
@@ -317,13 +318,13 @@ impl Tim {
             if (self.dier & (1 << 10)) != 0 {
                 self.trigger_cc_dma_request(sys, 2);
             }
-        } else if (self.ccer & (1 << 4)) != 0 && (self.sr & (1 << 2)) != 0 && check_cc(old_cnt, self.cnt, self.ccr2) {
+        } else if (self.sr & (1 << 2)) != 0 && check_cc(old_cnt, self.cnt, self.ccr2) {
             // CC2 overflow: flag already set, but counter crossed threshold again
             self.sr |= 1 << 10; // set CC2OF
         }
-        // CCR3 – DIER bit 3, SR bit 3, CCER CC3E bit 8
-        if (self.ccer & (1 << 8)) != 0
-            && (self.dier & (1 << 3)) != 0
+        // CCR3 – DIER bit 3, SR bit 3
+        // Note: CCER.CC3E (output enable) is NOT required for interrupt generation.
+        if (self.dier & (1 << 3)) != 0
             && (self.sr & (1 << 3)) == 0
             && check_cc(old_cnt, self.cnt, self.ccr3)
         {
@@ -334,13 +335,13 @@ impl Tim {
             if (self.dier & (1 << 11)) != 0 {
                 self.trigger_cc_dma_request(sys, 3);
             }
-        } else if (self.ccer & (1 << 8)) != 0 && (self.sr & (1 << 3)) != 0 && check_cc(old_cnt, self.cnt, self.ccr3) {
+        } else if (self.sr & (1 << 3)) != 0 && check_cc(old_cnt, self.cnt, self.ccr3) {
             // CC3 overflow: flag already set, but counter crossed threshold again
             self.sr |= 1 << 11; // set CC3OF
         }
-        // CCR4 – DIER bit 4, SR bit 4, CCER CC4E bit 12
-        if (self.ccer & (1 << 12)) != 0
-            && (self.dier & (1 << 4)) != 0
+        // CCR4 – DIER bit 4, SR bit 4
+        // Note: CCER.CC4E (output enable) is NOT required for interrupt generation.
+        if (self.dier & (1 << 4)) != 0
             && (self.sr & (1 << 4)) == 0
             && check_cc(old_cnt, self.cnt, self.ccr4)
         {
@@ -351,7 +352,7 @@ impl Tim {
             if (self.dier & (1 << 12)) != 0 {
                 self.trigger_cc_dma_request(sys, 4);
             }
-        } else if (self.ccer & (1 << 12)) != 0 && (self.sr & (1 << 4)) != 0 && check_cc(old_cnt, self.cnt, self.ccr4) {
+        } else if (self.sr & (1 << 4)) != 0 && check_cc(old_cnt, self.cnt, self.ccr4) {
             // CC4 overflow: flag already set, but counter crossed threshold again
             self.sr |= 1 << 12; // set CC4OF
         }

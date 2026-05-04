@@ -485,7 +485,38 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         }
 
         if let Err(e) = result {
-            bail!(e);
+            let uc = sys.uc.borrow();
+            let sp = uc.reg_read(RegisterARM::SP).unwrap_or(0);
+            let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);
+            let ipsr = uc.reg_read(RegisterARM::IPSR).unwrap_or(0);
+            let xpsr = uc.reg_read(RegisterARM::CPSR).unwrap_or(0);
+            let mut bytes = [0u8; 16];
+            let around = if pc >= 8 { pc - 8 } else { pc };
+            let (last_pc, last_sz) = unsafe { LAST_INSTRUCTION };
+            let insn_bytes = if uc.mem_read(around, &mut bytes).is_ok() {
+                format!(
+                    "{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5], bytes[6], bytes[7],
+                    bytes[8], bytes[9], bytes[10], bytes[11],
+                    bytes[12], bytes[13], bytes[14], bytes[15],
+                )
+            } else {
+                "<unreadable>".to_string()
+            };
+            bail!(
+                "{} at pc=0x{:08x} sp=0x{:08x} lr=0x{:08x} ipsr=0x{:08x} xpsr=0x{:08x} last=0x{:08x}/{} mem[pc-8..pc+8]=0x{:08x}: {}",
+                e,
+                pc,
+                sp,
+                lr,
+                ipsr,
+                xpsr,
+                last_pc,
+                last_sz,
+                around,
+                insn_bytes
+            );
         }
 
         if args.stop_addr == Some(pc as u32) {

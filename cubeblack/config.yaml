@@ -4,9 +4,14 @@ cpu:
   vector_table: 0x08004000  #?? - if VECT_TAB_OFFSET 0x00004000 and then VECT_TAB_BASE_ADDRESS is either SRAM_BASE or FLASH_BASE
   #id: 0x1234_5678_BABE_1234_5678_BABE
 regions:
-  - name: NULL_forgiveness
+  - name: BL_ALIAS
     start: 0x00000000
-    size: 4096
+    load: CubeBlack_bl.bin
+    size: 0x4000
+  - name: ROM_ALIAS
+    start: 0x00004000
+    load: arducopter.bin
+    size: 0x1FC000
   - name: BL
     start: 0x08000000  # dec:134217728
     load: CubeBlack_bl.bin
