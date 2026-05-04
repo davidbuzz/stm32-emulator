@@ -223,6 +223,26 @@ impl OtgFs {
 }
 
 impl OtgFsState {
+    fn tx_fifo_depth_words(&self, ep: usize) -> u32 {
+        match ep {
+            0 => {
+                let depth = (self.dieptxf0 >> 16) & 0xFFFF;
+                if depth != 0 { depth } else { DTXFSTS_RESET_WORDS }
+            }
+            1..=3 => {
+                let depth = (self.dieptxf[ep - 1] >> 16) & 0xFFFF;
+                if depth != 0 { depth } else { DTXFSTS_RESET_WORDS }
+            }
+            _ => DTXFSTS_RESET_WORDS,
+        }
+    }
+
+    fn reset_tx_fifo_level(&mut self, ep: usize) {
+        if ep < EP_COUNT {
+            self.out_tx_fifo_level[ep] = self.tx_fifo_depth_words(ep);
+        }
+    }
+
     fn enum_stage_setup_packet(stage: UsbEnumStage) -> Option<([u32; 2], &'static str)> {
         match stage {
             UsbEnumStage::DeliverSetAddress => Some((SETUP_SET_ADDRESS, "SetAddress")),
@@ -418,7 +438,7 @@ impl OtgFsState {
                         // DTXFSTS: transmit FIFO status. Bits [15:0] = number of free space
                         // locations in the IN endpoint TX FIFO (in 32-bit words).
                         let fifo_space = if ep < EP_COUNT {
-                            self.out_tx_fifo_level[ep]
+                            self.out_tx_fifo_level[ep].min(self.tx_fifo_depth_words(ep))
                         } else {
                             0x0080
                         };
@@ -455,7 +475,7 @@ impl OtgFsState {
                             self.dieptsiz[ep] = value;
                             // When DIEPTSIZ is written with valid packet count/size, restore TX FIFO space.
                             if value != 0 && value != 0xFFFF_FFFF {
-                                self.out_tx_fifo_level[ep] = DTXFSTS_RESET_WORDS;
+                                self.reset_tx_fifo_level(ep);
                             }
                         }
                     }
@@ -567,13 +587,25 @@ impl OtgFsState {
             }
             0x0018 => self.gintmsk = value,
             0x0024 => self.grxfsiz = value,
-            0x0028 => self.dieptxf0 = value,
+            0x0028 => {
+                self.dieptxf0 = value;
+                self.reset_tx_fifo_level(0);
+            }
             0x0038 => self.gccfg = value,
             0x003c => self.cid = value,
             0x0100 => self.hptxfsiz = value,
-            0x0104 => self.dieptxf[0] = value,
-            0x0108 => self.dieptxf[1] = value,
-            0x010c => self.dieptxf[2] = value,
+            0x0104 => {
+                self.dieptxf[0] = value;
+                self.reset_tx_fifo_level(1);
+            }
+            0x0108 => {
+                self.dieptxf[1] = value;
+                self.reset_tx_fifo_level(2);
+            }
+            0x010c => {
+                self.dieptxf[2] = value;
+                self.reset_tx_fifo_level(3);
+            }
             _ => {}
         }
 
