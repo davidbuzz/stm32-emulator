@@ -185,6 +185,36 @@ impl Nvic {
         }
     }
 
+    fn system_irq_priority_value(&self, irq: i32) -> u8 {
+        match irq {
+            -12 => (self.shpr[0] & 0xff) as u8,          // MemManage
+            -11 => ((self.shpr[0] >> 8) & 0xff) as u8,   // BusFault
+            -10 => ((self.shpr[0] >> 16) & 0xff) as u8,  // UsageFault
+            -5 => ((self.shpr[1] >> 24) & 0xff) as u8,   // SVCall
+            -4 => (self.shpr[1] & 0xff) as u8,           // DebugMonitor
+            -2 => ((self.shpr[2] >> 16) & 0xff) as u8,   // PendSV
+            -1 => ((self.shpr[2] >> 24) & 0xff) as u8,   // SysTick
+            _ => 0,
+        }
+    }
+
+    fn irq_raw_priority(&self, irq: i32) -> u8 {
+        if irq >= 0 {
+            self.irq_priority_value(irq)
+        } else {
+            self.system_irq_priority_value(irq)
+        }
+    }
+
+    fn active_preempt_priority(&self, current_exception: u64) -> Option<u8> {
+        if current_exception == 0 {
+            return None;
+        }
+
+        let active_irq = (current_exception as i32) - IRQ_OFFSET;
+        Some(self.preempt_priority_value(self.irq_raw_priority(active_irq)))
+    }
+
     fn preempt_priority_value(&self, raw_prio: u8) -> u8 {
         self.priority_fields(raw_prio).0
     }
@@ -218,6 +248,82 @@ impl Nvic {
         }
 
         true
+    }
+
+    fn is_system_irq_dispatchable(
+        &self,
+        irq: i32,
+        primask_disabled: bool,
+        faultmask_disabled: bool,
+        basepri: u32,
+        current_active_prio: Option<u8>,
+    ) -> bool {
+        if !Self::system_irq_allowed(irq, primask_disabled, faultmask_disabled) {
+            return false;
+        }
+
+        let raw_prio = self.system_irq_priority_value(irq);
+        let prio = self.preempt_priority_value(raw_prio);
+
+        // BASEPRI masks configurable exceptions and external IRQs.
+        if basepri != 0 && irq > -13 && (raw_prio as u32) >= basepri {
+            return false;
+        }
+
+        // Nested preemption requires strictly higher preempt class.
+        if let Some(active_prio) = current_active_prio {
+            if prio >= active_prio {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn select_next_system_irq(
+        &self,
+        primask_disabled: bool,
+        faultmask_disabled: bool,
+        basepri: u32,
+        current_active_prio: Option<u8>,
+    ) -> Option<i32> {
+        let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
+        let mut sys_pending = self.pending & sys_pending_mask;
+
+        let mut best_irq: Option<i32> = None;
+        let mut best_preempt: u8 = u8::MAX;
+        let mut best_sub: u8 = u8::MAX;
+
+        while sys_pending != 0 {
+            let bit = sys_pending.trailing_zeros();
+            let irq = (bit as i32) - IRQ_OFFSET;
+
+            if self.is_system_irq_dispatchable(
+                irq,
+                primask_disabled,
+                faultmask_disabled,
+                basepri,
+                current_active_prio,
+            ) {
+                let (preempt, sub) = self.priority_fields(self.system_irq_priority_value(irq));
+                let better_tie_break = match best_irq {
+                    None => true,
+                    Some(existing) => irq < existing,
+                };
+                if preempt < best_preempt
+                    || (preempt == best_preempt && sub < best_sub)
+                    || (preempt == best_preempt && sub == best_sub && better_tie_break)
+                {
+                    best_preempt = preempt;
+                    best_sub = sub;
+                    best_irq = Some(irq);
+                }
+            }
+
+            sys_pending &= !(1u128 << bit);
+        }
+
+        best_irq
     }
 
     fn take_next_external_irq(&mut self, basepri: u32, current_active_prio: Option<u8>) -> Option<i32> {
@@ -272,12 +378,7 @@ impl Nvic {
             );
         }
 
-        if let Some(irq) = best_irq {
-            self.clear_intr_pending(irq);
-            Some(irq)
-        } else {
-            None
-        }
+        best_irq
     }
 
     pub fn get_and_clear_next_intr_pending(&mut self) -> Option<i32> {
@@ -355,27 +456,7 @@ impl Nvic {
         let basepri = sys.uc.borrow().reg_read(RegisterARM::BASEPRI).unwrap() as u32;
         let current_exception = sys.uc.borrow().reg_read(RegisterARM::IPSR).unwrap();
 
-        let current_active_prio = if current_exception >= IRQ_OFFSET as u64 {
-            let active_irq = (current_exception as i32) - IRQ_OFFSET;
-            Some(self.preempt_priority_value(self.irq_priority_value(active_irq)))
-        } else {
-            None
-        };
-
-        // Keep existing simple system-exception behavior in thread mode.
-        if current_exception == 0 {
-            let sys_pending_mask = (1u128 << IRQ_OFFSET) - 1;
-            let mut sys_pending = self.pending & sys_pending_mask;
-            while sys_pending != 0 {
-                let bit = sys_pending.trailing_zeros();
-                let irq = (bit as i32) - IRQ_OFFSET;
-                if Self::system_irq_allowed(irq, primask_disabled, faultmask_disabled) {
-                    self.pending &= !(1u128 << bit);
-                    return Some(irq);
-                }
-                sys_pending &= !(1u128 << bit);
-            }
-        }
+        let current_active_prio = self.active_preempt_priority(current_exception);
 
         if primask_disabled || faultmask_disabled {
             trace!(
@@ -389,8 +470,41 @@ impl Nvic {
             return None;
         }
 
-        if let Some(irq) = self.take_next_external_irq(basepri, current_active_prio) {
-            return Some(irq);
+        let system_candidate = self.select_next_system_irq(
+            primask_disabled,
+            faultmask_disabled,
+            basepri,
+            current_active_prio,
+        );
+        let external_candidate = self.take_next_external_irq(basepri, current_active_prio);
+
+        match (system_candidate, external_candidate) {
+            (Some(sys_irq), Some(ext_irq)) => {
+                let (sys_preempt, sys_sub) = self.priority_fields(self.system_irq_priority_value(sys_irq));
+                let (ext_preempt, ext_sub) = self.priority_fields(self.irq_priority_value(ext_irq));
+
+                let choose_system = sys_preempt < ext_preempt
+                    || (sys_preempt == ext_preempt && sys_sub < ext_sub)
+                    || (sys_preempt == ext_preempt && sys_sub == ext_sub && sys_irq < ext_irq);
+
+                if choose_system {
+                    self.clear_intr_pending(ext_irq);
+                    self.clear_intr_pending(sys_irq);
+                    return Some(sys_irq);
+                }
+
+                self.clear_intr_pending(ext_irq);
+                return Some(ext_irq);
+            }
+            (Some(sys_irq), None) => {
+                self.clear_intr_pending(sys_irq);
+                return Some(sys_irq);
+            }
+            (None, Some(ext_irq)) => {
+                self.clear_intr_pending(ext_irq);
+                return Some(ext_irq);
+            }
+            (None, None) => {}
         }
 
         None

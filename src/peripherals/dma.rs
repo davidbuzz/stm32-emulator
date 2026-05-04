@@ -655,6 +655,13 @@ impl Stream {
             return 1;
         }
 
+        if self.fifo_enabled() && self.dir() != Dir::MemCopy {
+            // Peripheral request-driven streams are paced beat-by-beat so FIFO fill/drain
+            // progresses across arbitration rounds instead of draining an entire threshold
+            // window in a single service pass.
+            return 1;
+        }
+
         if !self.fifo_enabled() {
             // Direct mode: effectively one beat per request window.
             return 1;
@@ -753,7 +760,6 @@ impl Stream {
 
         let mut ok = true;
         let chunk_beats = self.transfer_beats_per_chunk();
-        let mut transferred_total_bytes: usize = 0;
 
         // Check FIFO threshold constraints before starting transfer
         if self.would_violate_fifo_threshold(chunk_beats) {
@@ -915,8 +921,6 @@ impl Stream {
                 peri_addr = peri_addr.wrapping_add((beats * psize) as u32);
             }
 
-            transferred_total_bytes = transferred_total_bytes.saturating_add(beats * std::cmp::max(psize, msize));
-
             remaining_beats -= beats;
             remaining_budget -= beats;
             self.ndtr = remaining_beats as u32;
@@ -924,10 +928,13 @@ impl Stream {
 
         // Update FIFO byte tracking after transfer
         if ok && self.fifo_enabled() {
-            let _ = dir;
-            let _ = transferred_total_bytes;
-            // DMA model performs chunk service atomically; FIFO drains by end of the transfer slice.
-            self.fifo_bytes = 0;
+            let beat_bytes = std::cmp::max(psize, msize);
+            if self.ndtr == 0 {
+                self.fifo_bytes = 0;
+            } else {
+                // Keep FIFO non-empty between deferred slices to expose intermediate FS states.
+                self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, beat_bytes);
+            }
         }
 
         let half_threshold = self.initial_ndtr / 2;
