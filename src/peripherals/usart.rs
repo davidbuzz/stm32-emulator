@@ -64,6 +64,8 @@ pub struct Usart {
     cr3: u32,
     gtpr: u32,
     rx_dma_pending: VecDeque<u8>,
+    rx_staged_byte: Option<u8>,
+    rx_active_since: Option<u64>,
     
     // TX state machine: track when DR was written to trigger TXE/TC transitions
     tx_active_since: Option<u64>,
@@ -167,6 +169,12 @@ impl Usart {
 
         let apb_div = self.apb_clock_divider(sys) as u64;
         raw_delay.saturating_mul(apb_div).clamp(2, 256)
+    }
+
+    fn rx_completion_delay(&self, sys: &System) -> u64 {
+        // Use a bounded derivative of TX timing for receive sampling latency.
+        // This keeps RX path BRR-sensitive without creating long stalls.
+        self.tx_completion_delay(sys).saturating_div(2).clamp(1, 128)
     }
 
     fn apb_clock_divider(&self, sys: &System) -> u32 {
@@ -275,10 +283,23 @@ impl Usart {
             return;
         };
 
-        let byte = dev.borrow_mut().read(sys, ());
-        if byte == 0 {
+        let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+        let byte = if let (Some(staged), Some(since)) = (self.rx_staged_byte, self.rx_active_since) {
+            if now.saturating_sub(since) < self.rx_completion_delay(sys) {
+                return;
+            }
+            self.rx_staged_byte = None;
+            self.rx_active_since = None;
+            staged
+        } else {
+            let b = dev.borrow_mut().read(sys, ());
+            if b == 0 {
+                return;
+            }
+            self.rx_staged_byte = Some(b);
+            self.rx_active_since = Some(now);
             return;
-        }
+        };
 
         if (self.cr3 & USART_CR3_DMAR) != 0 {
             // With DMAR enabled, stage a single pending byte for DMA consumption.
@@ -435,6 +456,8 @@ impl Peripheral for Usart {
 
                 if old_ue && !new_ue {
                     self.tx_active_since = None;
+                    self.rx_active_since = None;
+                    self.rx_staged_byte = None;
                     self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                     self.rx_dma_pending.clear();
                 }
@@ -445,6 +468,8 @@ impl Peripheral for Usart {
                 }
 
                 if old_re && !new_re {
+                    self.rx_active_since = None;
+                    self.rx_staged_byte = None;
                     self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                     self.rx_dma_pending.clear();
                 }
@@ -462,6 +487,8 @@ impl Peripheral for Usart {
                 self.normalize_mode_registers();
 
                 if !self.rx_enabled() {
+                    self.rx_active_since = None;
+                    self.rx_staged_byte = None;
                     self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                     self.rx_dma_pending.clear();
                 }
