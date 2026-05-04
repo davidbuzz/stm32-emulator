@@ -203,6 +203,12 @@ impl Dma {
                     return None;
                 }
 
+                // Mem2mem streams are not tied to peripheral request lines and should
+                // not participate in shared peripheral request arbitration.
+                if s.dir() == Dir::MemCopy || s.par == 0 {
+                    return None;
+                }
+
                 Some(idx)
             })
             .collect()
@@ -216,6 +222,9 @@ impl Dma {
         let candidate = &self.streams[stream_idx];
         let channel = candidate.channel();
         let cand_dir = candidate.dir();
+        if cand_dir == Dir::MemCopy || candidate.par == 0 {
+            return false;
+        }
         let cand_pl = candidate.priority();
         let cand_peri_desc = sys.p.addr_desc(candidate.par);
         let cand_peri_name = peripheral_name_from_desc(&cand_peri_desc);
@@ -375,6 +384,28 @@ impl Peripheral for Dma {
                         _ => Dir::Invalid,
                     };
                     let new_pl = ((value >> 16) & 0b11) as u8;
+
+                    if new_dir == Dir::MemCopy || par == 0 {
+                        match self.streams[i].write(&self.name, i, sys, offset, value) {
+                            StreamWriteResult::Completed { half } => {
+                                if half {
+                                    self.signal_ht(sys, i);
+                                }
+                                self.signal_tc(sys, i);
+                            }
+                            StreamWriteResult::FifoError => {
+                                self.signal_fe(sys, i);
+                            }
+                            StreamWriteResult::ModeError => {
+                                self.signal_mode_error(sys, i);
+                            }
+                            StreamWriteResult::TransferError => {
+                                self.signal_te(sys, i);
+                            }
+                            StreamWriteResult::Noop => {}
+                        }
+                        return;
+                    }
 
                     let owners = self.find_request_conflicts(i, channel);
                     let mut blocking_owners = Vec::new();
