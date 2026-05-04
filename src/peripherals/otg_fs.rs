@@ -259,6 +259,22 @@ impl OtgFsState {
             UsbEnumStage::Configured | UsbEnumStage::Idle => None,
         }
     }
+    fn rx_fifo_capacity_words(&self) -> u32 {
+        let words = self.grxfsiz & 0xFFFF;
+        if words == 0 { 1 } else { words }
+    }
+
+    fn assert_rxflvl(&mut self, words: u32) {
+        self.rx_fifo_level = words.min(self.rx_fifo_capacity_words());
+        if self.rx_fifo_level > 0 {
+            self.gintsts |= GINTSTS_RXFLVL;
+        }
+    }
+
+    fn clear_rxflvl(&mut self) {
+        self.gintsts &= !GINTSTS_RXFLVL;
+        self.rx_fifo_level = 0;
+    }
 
     fn maybe_arm_startup_events(&mut self) {
         if self.startup_stage == StartupStage::Idle
@@ -535,8 +551,7 @@ impl OtgFsState {
                     }
                     Ep0RxState::RxFlvlCompletePending => {
                         self.ep0_rx_state = Ep0RxState::StupPending;
-                        self.gintsts &= !GINTSTS_RXFLVL;
-                        self.rx_fifo_level = 0;
+                        self.clear_rxflvl();
                         GRXSTSP_PKTSTS_SETUP_COMPL
                     }
                     Ep0RxState::OutDataStatusPending => {
@@ -546,8 +561,7 @@ impl OtgFsState {
                     }
                     Ep0RxState::OutCompletePending => {
                         self.ep0_rx_state = Ep0RxState::OutXfrcPending;
-                        self.gintsts &= !GINTSTS_RXFLVL;
-                        self.rx_fifo_level = 0;
+                        self.clear_rxflvl();
                         GRXSTSP_PKTSTS_OUT_COMPL
                     }
                     _ => self.grxstsr,
@@ -765,7 +779,7 @@ impl Peripheral for OtgFs {
                 shared.ep0_pending_setup = pkt;
                 shared.ep0_rx_state = Ep0RxState::RxFlvlStatusPending;
                 shared.ep0_setup_inflight = true;
-                shared.gintsts |= GINTSTS_RXFLVL;
+                shared.assert_rxflvl(1);
             }
         }
 
@@ -783,7 +797,8 @@ impl Peripheral for OtgFs {
                 | Ep0RxState::OutDataFifoPending
                 | Ep0RxState::OutCompletePending
         ) {
-            shared.gintsts |= GINTSTS_RXFLVL;
+            let lvl = shared.calculate_rx_fifo_level().max(1);
+            shared.assert_rxflvl(lvl);
         }
 
         // Reset irq_latched when RXFLVL has been freshly re-asserted for a new epoch,
@@ -803,7 +818,7 @@ impl Peripheral for OtgFs {
                 shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP);
                 shared.ep0_pending_out_data = CDC_LINE_CODING_115200_8N1;
                 shared.ep0_rx_state = Ep0RxState::OutDataStatusPending;
-                shared.gintsts |= GINTSTS_RXFLVL;
+                shared.assert_rxflvl(1);
             } else if shared.enum_stage == UsbEnumStage::DeliverGetLineCoding {
                 info!("OTG_FS: StupPending fires → DOEPINT STUP (enum_stage=DeliverGetLineCoding)");
                 shared.mark_out_endpoint_interrupt(0, DOEPINT_STUP);
