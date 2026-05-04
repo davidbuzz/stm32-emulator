@@ -23,6 +23,7 @@ use crate::emulator::NUM_INSTRUCTIONS;
 const USART_SR_RXNE: u32 = 1 << 5;  // Receive data not empty
 const USART_SR_TC: u32 = 1 << 6;    // Transmission complete
 const USART_SR_TXE: u32 = 1 << 7;   // Transmit data register empty
+const USART_SR_LBD: u32 = 1 << 8;   // LIN break detection flag
 const USART_SR_IDLE: u32 = 1 << 4;  // Idle line detected
 const USART_SR_ORE: u32 = 1 << 3;   // Overrun error
 const USART_SR_NE: u32 = 1 << 2;    // Noise error
@@ -46,6 +47,7 @@ const USART_CR1_TCIE: u32 = 1 << 6;  // TC interrupt enable
 const USART_CR1_RXNEIE: u32 = 1 << 5;// RXNE interrupt enable
 const USART_CR2_STOP_MASK: u32 = 0b11 << 12;
 const USART_CR2_LINEN: u32 = 1 << 14;
+const USART_CR2_LBDIE: u32 = 1 << 6;
 const USART_CR2_CLKEN: u32 = 1 << 11;
 
 // Default TX latency used when BRR has not been configured yet.
@@ -317,6 +319,7 @@ impl Usart {
         // LIN break frame samples as all-zero payload in this simplified model.
         if (self.cr2 & USART_CR2_LINEN) != 0 && raw_byte == 0 {
             status |= USART_SR_FE;
+            status |= USART_SR_LBD;
         }
 
         (data & self.rx_data_mask(), status)
@@ -408,12 +411,15 @@ impl Usart {
         let rxneie = (self.cr1 & USART_CR1_RXNEIE) != 0;
         let peie = (self.cr1 & USART_CR1_PEIE) != 0;
         let eie = (self.cr3 & USART_CR3_EIE) != 0;
+        let lbd = (self.sr & USART_SR_LBD) != 0;
+        let lbdie = (self.cr2 & USART_CR2_LBDIE) != 0;
 
         if (tx_enabled && txe && txeie)
             || (tx_enabled && tc && tcie)
             || (rx_enabled && rxne && rxneie)
             || (rx_enabled && pe && peie)
             || (rx_enabled && err && eie)
+            || (rx_enabled && lbd && lbdie)
         {
             sys.p.nvic.borrow_mut().set_intr_pending(self.irq);
         }
@@ -450,7 +456,7 @@ impl Peripheral for Usart {
                 self.dr &= self.rx_data_mask();
                 if self.sr_read_since_last_dr_read {
                     // RM-style SR->DR sequence clears receive and line-status flags.
-                    self.sr &= !(USART_SR_RXNE | USART_SR_IDLE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                    self.sr &= !(USART_SR_LBD | USART_SR_RXNE | USART_SR_IDLE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                 }
                 self.sr_read_since_last_dr_read = false;
 
@@ -517,7 +523,7 @@ impl Peripheral for Usart {
                     self.tx_active_since = None;
                     self.rx_active_since = None;
                     self.rx_staged_byte = None;
-                    self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                    self.sr &= !(USART_SR_LBD | USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                     self.rx_dma_pending.clear();
                 }
 
@@ -529,7 +535,7 @@ impl Peripheral for Usart {
                 if old_re && !new_re {
                     self.rx_active_since = None;
                     self.rx_staged_byte = None;
-                    self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                    self.sr &= !(USART_SR_LBD | USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                     self.rx_dma_pending.clear();
                 }
 
@@ -548,7 +554,7 @@ impl Peripheral for Usart {
                 if !self.rx_enabled() {
                     self.rx_active_since = None;
                     self.rx_staged_byte = None;
-                    self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
+                    self.sr &= !(USART_SR_LBD | USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                     self.rx_dma_pending.clear();
                 }
                 self.maybe_raise_irq(sys);
