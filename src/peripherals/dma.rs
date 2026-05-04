@@ -361,6 +361,12 @@ impl Peripheral for Dma {
                     let mut blocking_owners = Vec::new();
                     let mut preempted_owners = Vec::new();
                     for owner in owners {
+                        if !self.streams[owner].ready_for_step(sys) {
+                            // Keep enable-time arbitration aligned with deferred runtime:
+                            // sleeping/deferred owners do not block ready contenders.
+                            continue;
+                        }
+
                         let owner_peri_desc = sys.p.addr_desc(self.streams[owner].par);
                         let owner_peri_name = peripheral_name_from_desc(&owner_peri_desc);
                         let same_peripheral_request = match (peri_name, owner_peri_name) {
@@ -375,9 +381,10 @@ impl Peripheral for Dma {
                         let owner_dir = self.streams[owner].dir();
                         let owner_pl = self.streams[owner].priority();
                         // Keep full-duplex read/write stream pair sharing for SPI-style transfers.
-                        let full_duplex_pair =
-                            (new_dir == Dir::Read && owner_dir == Dir::Write)
-                            || (new_dir == Dir::Write && owner_dir == Dir::Read);
+                        let spi_peripheral = peri_name.map(|n| n.starts_with("SPI")).unwrap_or(false);
+                        let full_duplex_pair = spi_peripheral
+                            && ((new_dir == Dir::Read && owner_dir == Dir::Write)
+                                || (new_dir == Dir::Write && owner_dir == Dir::Read));
                         if full_duplex_pair {
                             continue;
                         }
