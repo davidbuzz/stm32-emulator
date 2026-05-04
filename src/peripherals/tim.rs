@@ -18,6 +18,13 @@ use super::{Peripheral, meta::DeviceMeta};
 
 const RCC_BASE: u64 = 0x4002_3800;
 const RCC_CFGR_OFFSET: u64 = 0x08;
+const DMA1_BASE: u64 = 0x4002_6000;
+const DMA2_BASE: u64 = 0x4002_6400;
+const DMA_LISR_OFFSET: u64 = 0x00;
+const DMA_HISR_OFFSET: u64 = 0x04;
+const DMA_STREAM_CR_BASE_OFFSET: u64 = 0x10;
+const DMA_STREAM_STRIDE: u64 = 0x18;
+const DMA_STREAM_COUNT: usize = 8;
 
 #[derive(Default)]
 pub struct Tim {
@@ -399,16 +406,265 @@ impl Tim {
     }
 
     fn trigger_cc_dma_request(&self, sys: &System, cc: u8) {
-        // Determine which address and channel to trigger DMA for
-        // This is simplified: actual firmware would have configured a specific stream
-        // For now, we log that a CC DMA request occurred
         debug!("{} CC{} DMA request triggered (DIER bit {} set)", self.name, cc, 8 + cc);
-        // TODO: enumerate active DMA streams for this timer and fire any that are waiting
+        self.service_timer_dma_request(sys, Some(cc));
     }
 
     fn trigger_update_dma_request(&self, sys: &System) {
         debug!("{} Update DMA request triggered (DIER bit 8 set)", self.name);
-        // TODO: enumerate active DMA streams for this timer update events
+        self.service_timer_dma_request(sys, None);
+    }
+
+    fn timer_base_addr(&self) -> Option<u32> {
+        match self.name.as_str() {
+            "TIM1" => Some(0x4001_0000),
+            "TIM2" => Some(0x4000_0000),
+            "TIM3" => Some(0x4000_0400),
+            "TIM4" => Some(0x4000_0800),
+            "TIM5" => Some(0x4000_0C00),
+            "TIM6" => Some(0x4000_1000),
+            "TIM7" => Some(0x4000_1400),
+            "TIM8" => Some(0x4001_0400),
+            "TIM9" => Some(0x4001_4000),
+            "TIM10" => Some(0x4001_4400),
+            "TIM11" => Some(0x4001_4800),
+            "TIM12" => Some(0x4000_1800),
+            "TIM13" => Some(0x4000_1C00),
+            "TIM14" => Some(0x4000_2000),
+            _ => None,
+        }
+    }
+
+    fn service_timer_dma_request(&self, sys: &System, cc: Option<u8>) {
+        let Some(timer_base) = self.timer_base_addr() else {
+            return;
+        };
+
+        self.service_dma_controller_request(sys, DMA1_BASE, "DMA1", timer_base, cc);
+        self.service_dma_controller_request(sys, DMA2_BASE, "DMA2", timer_base, cc);
+    }
+
+    fn service_dma_controller_request(&self, sys: &System, dma_base: u64, dma_name: &str, timer_base: u32, cc: Option<u8>) {
+        for stream in 0..DMA_STREAM_COUNT {
+            let stream_base = dma_base + DMA_STREAM_CR_BASE_OFFSET + (stream as u64) * DMA_STREAM_STRIDE;
+            self.service_dma_stream_request(sys, dma_base, dma_name, stream_base, stream, timer_base, cc);
+        }
+    }
+
+    fn service_dma_stream_request(
+        &self,
+        sys: &System,
+        dma_base: u64,
+        dma_name: &str,
+        stream_base: u64,
+        stream_idx: usize,
+        timer_base: u32,
+        cc: Option<u8>,
+    ) {
+        let mut uc = sys.uc.borrow_mut();
+        let mut word = [0u8; 4];
+
+        let read_u32 = |uc: &mut unicorn_engine::Unicorn<()>, addr: u64, buf: &mut [u8; 4]| -> Option<u32> {
+            if uc.mem_read(addr, buf).is_ok() {
+                Some(u32::from_le_bytes(*buf))
+            } else {
+                None
+            }
+        };
+
+        let write_u32 = |uc: &mut unicorn_engine::Unicorn<()>, addr: u64, value: u32| {
+            let _ = uc.mem_write(addr, &value.to_le_bytes());
+        };
+
+        let Some(mut cr) = read_u32(&mut uc, stream_base, &mut word) else {
+            return;
+        };
+        if (cr & 1) == 0 {
+            return;
+        }
+
+        let Some(mut ndtr) = read_u32(&mut uc, stream_base + 0x04, &mut word) else {
+            return;
+        };
+        ndtr &= 0xFFFF;
+        if ndtr == 0 {
+            return;
+        }
+
+        let Some(mut par) = read_u32(&mut uc, stream_base + 0x08, &mut word) else {
+            return;
+        };
+        let Some(mut m0ar) = read_u32(&mut uc, stream_base + 0x0C, &mut word) else {
+            return;
+        };
+
+        if par < timer_base || par >= timer_base + 0x60 {
+            return;
+        }
+
+        if let Some(cc_index) = cc {
+            let ccr_offset = match cc_index {
+                1 => 0x34,
+                2 => 0x38,
+                3 => 0x3C,
+                4 => 0x40,
+                _ => return,
+            };
+            if par != timer_base + ccr_offset {
+                return;
+            }
+        }
+
+        let dir = (cr >> 6) & 0b11;
+        if dir == 0b10 || dir == 0b11 {
+            return;
+        }
+
+        let minc = (cr & (1 << 10)) != 0;
+        let pinc = (cr & (1 << 9)) != 0;
+        let psize = match (cr >> 11) & 0b11 {
+            0b00 => 1usize,
+            0b01 => 2usize,
+            0b10 => 4usize,
+            _ => 1usize,
+        };
+        let msize = match (cr >> 13) & 0b11 {
+            0b00 => 1usize,
+            0b01 => 2usize,
+            0b10 => 4usize,
+            _ => 1usize,
+        };
+
+        drop(uc);
+
+        if dir == 0 {
+            let value = sys.p.read(sys, par, psize as u8);
+            let bytes = value.to_le_bytes();
+            let mut mem_bytes = [0u8; 4];
+            mem_bytes[..msize].copy_from_slice(&bytes[..msize]);
+            let _ = sys.uc.borrow_mut().mem_write(m0ar as u64, &mem_bytes[..msize]);
+        } else {
+            let mut mem_bytes = [0u8; 4];
+            if sys.uc.borrow().mem_read(m0ar as u64, &mut mem_bytes[..msize]).is_err() {
+                return;
+            }
+            let value = u32::from_le_bytes(mem_bytes);
+            let masked = match psize {
+                1 => value & 0xFF,
+                2 => value & 0xFFFF,
+                _ => value,
+            };
+            sys.p.write(sys, par, psize as u8, masked);
+        }
+
+        let mut uc = sys.uc.borrow_mut();
+        if minc {
+            m0ar = m0ar.saturating_add(msize as u32);
+            write_u32(&mut uc, stream_base + 0x0C, m0ar);
+        }
+        if pinc {
+            par = par.saturating_add(psize as u32);
+            write_u32(&mut uc, stream_base + 0x08, par);
+        }
+
+        let initial_ndtr = ndtr;
+        ndtr = ndtr.saturating_sub(1);
+        write_u32(&mut uc, stream_base + 0x04, ndtr);
+
+        let half_threshold = initial_ndtr / 2;
+        let crossed_half = initial_ndtr > 1 && ndtr == half_threshold;
+        if crossed_half {
+            self.set_dma_status_flags(&mut uc, dma_base, stream_idx, false, true);
+            self.maybe_raise_dma_stream_irq(sys, dma_name, stream_idx, cr, false, true);
+        }
+
+        if ndtr == 0 {
+            let circular = (cr & (1 << 8)) != 0;
+            let double_buffer = (cr & (1 << 18)) != 0;
+            if double_buffer {
+                cr ^= 1 << 19;
+                if let Some(reload) = read_u32(&mut uc, stream_base + 0x04, &mut word) {
+                    let reload = if reload == 0 { initial_ndtr } else { reload & 0xFFFF };
+                    write_u32(&mut uc, stream_base + 0x04, reload);
+                }
+            } else if circular {
+                write_u32(&mut uc, stream_base + 0x04, initial_ndtr);
+            } else {
+                cr &= !1;
+                write_u32(&mut uc, stream_base, cr);
+            }
+
+            self.set_dma_status_flags(&mut uc, dma_base, stream_idx, true, false);
+            self.maybe_raise_dma_stream_irq(sys, dma_name, stream_idx, cr, true, false);
+        }
+    }
+
+    fn set_dma_status_flags(
+        &self,
+        uc: &mut unicorn_engine::Unicorn<()>,
+        dma_base: u64,
+        stream: usize,
+        set_tc: bool,
+        set_ht: bool,
+    ) {
+        let (status_offset, shift) = if stream < 4 {
+            (DMA_LISR_OFFSET, stream)
+        } else {
+            (DMA_HISR_OFFSET, stream - 4)
+        };
+
+        let gif_bit = match shift {
+            0 => 0,
+            1 => 6,
+            2 => 16,
+            3 => 22,
+            _ => return,
+        };
+        let tcif_bit = gif_bit + 5;
+        let htif_bit = gif_bit + 4;
+
+        let mut reg = [0u8; 4];
+        if uc.mem_read(dma_base + status_offset, &mut reg).is_err() {
+            return;
+        }
+        let mut status = u32::from_le_bytes(reg);
+        status |= 1 << gif_bit;
+        if set_tc {
+            status |= 1 << tcif_bit;
+        }
+        if set_ht {
+            status |= 1 << htif_bit;
+        }
+        let _ = uc.mem_write(dma_base + status_offset, &status.to_le_bytes());
+    }
+
+    fn maybe_raise_dma_stream_irq(&self, sys: &System, dma_name: &str, stream: usize, cr: u32, tc: bool, ht: bool) {
+        let tcie = (cr & (1 << 4)) != 0;
+        let htie = (cr & (1 << 3)) != 0;
+        let should_raise = (tc && tcie) || (ht && htie);
+        if !should_raise {
+            return;
+        }
+
+        let irq = match dma_name {
+            "DMA1" => Some(11 + stream as i32),
+            "DMA2" => Some(match stream {
+                0 => 56,
+                1 => 57,
+                2 => 58,
+                3 => 59,
+                4 => 60,
+                5 => 68,
+                6 => 69,
+                7 => 70,
+                _ => return,
+            }),
+            _ => None,
+        };
+
+        if let Some(irq) = irq {
+            sys.p.nvic.borrow_mut().set_intr_pending(irq);
+        }
     }
 }
 
