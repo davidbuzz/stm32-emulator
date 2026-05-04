@@ -879,7 +879,23 @@ impl Stream {
             let fifo_chunk_bytes = beats * std::cmp::max(psize, msize);
 
             if self.fifo_enabled() {
-                self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, fifo_chunk_bytes);
+                // Model FIFO fill/drain around each serviced chunk instead of forcing
+                // a fixed occupancy snapshot. This keeps FS transitions direction-aware.
+                match dir {
+                    Dir::Read => {
+                        self.fifo_bytes = std::cmp::min(
+                            DMA_FIFO_CAPACITY_BYTES,
+                            self.fifo_bytes.saturating_add(fifo_chunk_bytes),
+                        );
+                    }
+                    Dir::Write => {
+                        self.fifo_bytes = std::cmp::min(
+                            DMA_FIFO_CAPACITY_BYTES,
+                            self.fifo_bytes.saturating_add(fifo_chunk_bytes),
+                        );
+                    }
+                    Dir::MemCopy | Dir::Invalid => {}
+                }
             }
 
             match dir {
@@ -924,6 +940,16 @@ impl Stream {
                         if let Err(e) = sys.uc.borrow_mut().mem_write(mem_addr.into(), &bytes[bytes.len().saturating_sub(msize)..]) {
                             warn!("DMA P2M write (MINC=0) failed addr=0x{:08x} e={}", mem_addr, UniErr(e));
                             ok = false;
+                        }
+                    }
+
+                    if self.fifo_enabled() {
+                        // After draining FIFO to memory, retain a small non-zero occupancy
+                        // between deferred slices to expose intermediate FS states.
+                        let drained = std::cmp::min(self.fifo_bytes, fifo_chunk_bytes);
+                        self.fifo_bytes = self.fifo_bytes.saturating_sub(drained);
+                        if self.ndtr > beats as u32 && self.fifo_bytes == 0 {
+                            self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, std::cmp::max(1, psize));
                         }
                     }
                 }
@@ -974,6 +1000,14 @@ impl Stream {
                     } else {
                         ok = false;
                     }
+
+                    if self.fifo_enabled() {
+                        let drained = std::cmp::min(self.fifo_bytes, fifo_chunk_bytes);
+                        self.fifo_bytes = self.fifo_bytes.saturating_sub(drained);
+                        if self.ndtr > beats as u32 && self.fifo_bytes == 0 {
+                            self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, std::cmp::max(1, msize));
+                        }
+                    }
                 }
 
                 Dir::MemCopy => {
@@ -1011,12 +1045,8 @@ impl Stream {
 
         // Update FIFO byte tracking after transfer
         if ok && self.fifo_enabled() {
-            let beat_bytes = std::cmp::max(psize, msize);
             if self.ndtr == 0 {
                 self.fifo_bytes = 0;
-            } else {
-                // Keep FIFO non-empty between deferred slices to expose intermediate FS states.
-                self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, beat_bytes);
             }
         }
 

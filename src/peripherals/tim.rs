@@ -196,6 +196,12 @@ impl Tim {
             self.cnt = 0;
             self.psc_accum = 0;
             self.trigger_update_event(sys, false);
+            return;
+        }
+
+        // Baseline trigger mode: in SMS=110, a trigger starts the counter.
+        if self.smcr_sms == 0b110 {
+            self.cr1 |= 1;
         }
     }
 
