@@ -537,10 +537,17 @@ impl Peripheral for Usart {
                 let old_ue = (self.cr1 & USART_CR1_UE) != 0;
                 let old_te = (self.cr1 & USART_CR1_TE) != 0;
                 let old_re = (self.cr1 & USART_CR1_RE) != 0;
+                let old_over8 = (self.cr1 & USART_CR1_OVER8) != 0;
                 self.cr1 = value;
                 let new_ue = (self.cr1 & USART_CR1_UE) != 0;
                 let new_te = (self.cr1 & USART_CR1_TE) != 0;
                 let new_re = (self.cr1 & USART_CR1_RE) != 0;
+                let new_over8 = (self.cr1 & USART_CR1_OVER8) != 0;
+
+                if !old_over8 && new_over8 {
+                    // OVER8 switches BRR to the x8 fraction layout where bit3 is reserved.
+                    self.brr &= !(1 << 3);
+                }
 
                 if old_ue && !new_ue {
                     self.tx_active_since = None;
