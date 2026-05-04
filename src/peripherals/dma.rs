@@ -238,6 +238,14 @@ impl Dma {
         }
     }
 
+    fn refresh_stream_irq_latches(&mut self) {
+        for stream in 0..8 {
+            if self.stream_has_enabled_pending_event(stream) {
+                self.deferred_stream_irq[stream] = true;
+            }
+        }
+    }
+
     fn signal_mode_error(&mut self, sys: &System, stream_idx: usize) {
         // TE is the generic transfer-error class. DME/FE are mode-specific:
         // direct mode uses DME, FIFO mode uses FE.
@@ -368,6 +376,9 @@ impl Dma {
 
 impl Peripheral for Dma {
     fn step(&mut self, sys: &System) {
+        // Re-latch IRQ delivery from currently visible status+IE combinations so
+        // enable-after-flag ordering still results in an interrupt pulse.
+        self.refresh_stream_irq_latches();
         self.service_deferred_stream_irqs(sys);
 
         let name = self.name.clone();
