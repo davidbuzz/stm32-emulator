@@ -158,8 +158,6 @@ struct OtgFsState {
     cdc_last_periodic_flush_clk: u64,
     /// RX FIFO level in words: tracks pending data for enumeration and generic transfers.
     rx_fifo_level: u32,
-    /// TX FIFO levels per OUT endpoint: tracks space available in each OUT endpoint TX FIFO.
-    out_tx_fifo_level: [u32; EP_COUNT],
 }
 
 pub struct OtgFs {
@@ -213,7 +211,6 @@ impl OtgFs {
                 event_delay: OTG_STARTUP_EVENT_DELAY,
                 sof_delay: OTG_SOF_PERIOD,
                 rx_fifo_level: 0,
-                out_tx_fifo_level: [DTXFSTS_RESET_WORDS; EP_COUNT],
                 ..Default::default()
             };
         }
@@ -223,23 +220,70 @@ impl OtgFs {
 }
 
 impl OtgFsState {
-    fn tx_fifo_depth_words(&self, ep: usize) -> u32 {
+    fn tx_fifo_cfg(&self, ep: usize) -> (u32, u32) {
         match ep {
             0 => {
+                let start = self.dieptxf0 & 0xFFFF;
                 let depth = (self.dieptxf0 >> 16) & 0xFFFF;
-                if depth != 0 { depth } else { DTXFSTS_RESET_WORDS }
+                if depth != 0 {
+                    (start, depth)
+                } else {
+                    (0, DTXFSTS_RESET_WORDS)
+                }
             }
             1..=3 => {
+                let start = self.dieptxf[ep - 1] & 0xFFFF;
                 let depth = (self.dieptxf[ep - 1] >> 16) & 0xFFFF;
-                if depth != 0 { depth } else { DTXFSTS_RESET_WORDS }
+                if depth != 0 {
+                    (start, depth)
+                } else {
+                    (0, DTXFSTS_RESET_WORDS)
+                }
             }
-            _ => DTXFSTS_RESET_WORDS,
+            _ => (0, DTXFSTS_RESET_WORDS),
+        }
+    }
+
+    fn tx_fifo_overlap_invalid(&self, ep: usize) -> bool {
+        let (start, depth) = self.tx_fifo_cfg(ep);
+        if depth == 0 {
+            return true;
+        }
+        let end = start.saturating_add(depth);
+        for other in 0..EP_COUNT {
+            if other == ep {
+                continue;
+            }
+            let (other_start, other_depth) = self.tx_fifo_cfg(other);
+            if other_depth == 0 {
+                continue;
+            }
+            let other_end = other_start.saturating_add(other_depth);
+            if start < other_end && other_start < end {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn tx_fifo_effective_depth_words(&self, ep: usize) -> u32 {
+        let (_, depth) = self.tx_fifo_cfg(ep);
+        if self.tx_fifo_overlap_invalid(ep) {
+            0
+        } else {
+            depth
         }
     }
 
     fn reset_tx_fifo_level(&mut self, ep: usize) {
         if ep < EP_COUNT {
-            self.out_tx_fifo_level[ep] = self.tx_fifo_depth_words(ep);
+            self.dtxfsts[ep] = self.tx_fifo_effective_depth_words(ep);
+        }
+    }
+
+    fn reset_all_tx_fifo_levels(&mut self) {
+        for ep in 0..EP_COUNT {
+            self.reset_tx_fifo_level(ep);
         }
     }
 
@@ -454,7 +498,9 @@ impl OtgFsState {
                         // DTXFSTS: transmit FIFO status. Bits [15:0] = number of free space
                         // locations in the IN endpoint TX FIFO (in 32-bit words).
                         let fifo_space = if ep < EP_COUNT {
-                            self.out_tx_fifo_level[ep].min(self.tx_fifo_depth_words(ep))
+                            let depth = self.tx_fifo_effective_depth_words(ep);
+                            let free = self.dtxfsts[ep].min(depth);
+                            free
                         } else {
                             0x0080
                         };
@@ -603,22 +649,22 @@ impl OtgFsState {
             0x0024 => self.grxfsiz = value,
             0x0028 => {
                 self.dieptxf0 = value;
-                self.reset_tx_fifo_level(0);
+                self.reset_all_tx_fifo_levels();
             }
             0x0038 => self.gccfg = value,
             0x003c => self.cid = value,
             0x0100 => self.hptxfsiz = value,
             0x0104 => {
                 self.dieptxf[0] = value;
-                self.reset_tx_fifo_level(1);
+                self.reset_all_tx_fifo_levels();
             }
             0x0108 => {
                 self.dieptxf[1] = value;
-                self.reset_tx_fifo_level(2);
+                self.reset_all_tx_fifo_levels();
             }
             0x010c => {
                 self.dieptxf[2] = value;
-                self.reset_tx_fifo_level(3);
+                self.reset_all_tx_fifo_levels();
             }
             _ => {}
         }
@@ -994,10 +1040,18 @@ pub fn fifo_write(ep: usize, word: u32) {
         let mut s = shared.borrow_mut();
 
         if ep < EP_COUNT {
-            // Each 32-bit write consumes one FIFO word.
-            s.out_tx_fifo_level[ep] = s.out_tx_fifo_level[ep].saturating_sub(1);
-            let free_words = s.out_tx_fifo_level[ep];
-            let depth_words = s.tx_fifo_depth_words(ep).max(1);
+            let ep_active = (s.diepctl[ep] & (DIEPCTL_EPENA | DIEPCTL_USBAEP))
+                == (DIEPCTL_EPENA | DIEPCTL_USBAEP);
+            let depth_words = s.tx_fifo_effective_depth_words(ep);
+            if !ep_active || depth_words == 0 {
+                // Endpoint/FIFO ownership not valid: keep TXFE clear and ignore this write.
+                s.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+                return;
+            }
+
+            // Each 32-bit write consumes one FIFO word when capacity is available.
+            s.dtxfsts[ep] = s.dtxfsts[ep].min(depth_words).saturating_sub(1);
+            let free_words = s.dtxfsts[ep];
             let txfe_threshold_words = std::cmp::max(1, depth_words / 2);
             if free_words == 0 {
                 // FIFO full: no empty interrupt should remain asserted.
