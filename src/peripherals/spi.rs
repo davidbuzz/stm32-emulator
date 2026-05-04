@@ -210,10 +210,23 @@ impl Peripheral for Spi {
         if offset != 0x000C {
             return;
         }
+
+        if (self.cr1 & SPI_CR1_SPE) == 0 {
+            return;
+        }
+
+        self.check_mode_fault();
+        if self.modf {
+            self.maybe_raise_irq(sys);
+            return;
+        }
+
         if self.rxne {
             // DMA write while previous RX data is still unread triggers overrun.
             self.ovr = true;
         }
+        self.sr |= SPI_SR_BSY;
+
         let cpha = (self.cr1 & SPI_CR1_CPHA) != 0;
         let cpol = (self.cr1 & SPI_CR1_CPOL) != 0;
         let tx_first = cpha ^ cpol;
