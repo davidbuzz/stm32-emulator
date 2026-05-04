@@ -301,10 +301,13 @@ impl Dma {
 
             let owner_peri_desc = sys.p.addr_desc(owner.par);
             let owner_peri_name = peripheral_name_from_desc(&owner_peri_desc);
-            let same_peripheral_request = match (cand_peri_name, owner_peri_name) {
-                (Some(a), Some(b)) => a == b,
-                _ => candidate.par == owner.par,
-            };
+            let same_peripheral_request = same_peripheral_request_target(
+                sys,
+                candidate.par,
+                cand_peri_name,
+                owner.par,
+                owner_peri_name,
+            );
 
             if !same_peripheral_request {
                 continue;
@@ -483,10 +486,13 @@ impl Peripheral for Dma {
 
                         let owner_peri_desc = sys.p.addr_desc(self.streams[owner].par);
                         let owner_peri_name = peripheral_name_from_desc(&owner_peri_desc);
-                        let same_peripheral_request = match (peri_name, owner_peri_name) {
-                            (Some(new_name), Some(owner_name)) => new_name == owner_name,
-                            _ => self.streams[i].par == self.streams[owner].par,
-                        };
+                        let same_peripheral_request = same_peripheral_request_target(
+                            sys,
+                            self.streams[i].par,
+                            peri_name,
+                            self.streams[owner].par,
+                            owner_peri_name,
+                        );
 
                         if !same_peripheral_request {
                             continue;
@@ -1377,6 +1383,25 @@ fn is_sdio_fifo_request(peri_desc: &str) -> bool {
 fn peripheral_name_from_desc(desc: &str) -> Option<&str> {
     let (_, tail) = desc.split_once("peri=")?;
     Some(tail.split_whitespace().next().unwrap_or_default())
+}
+
+fn same_peripheral_request_target(
+    sys: &System,
+    par_a: u32,
+    name_a: Option<&str>,
+    par_b: u32,
+    name_b: Option<&str>,
+) -> bool {
+    if let (Some(a), Some(b)) = (name_a, name_b) {
+        return a == b;
+    }
+
+    let slot_a = Peripherals::get_peripheral(&sys.p.peripherals, par_a).map(|p| p.start);
+    let slot_b = Peripherals::get_peripheral(&sys.p.peripherals, par_b).map(|p| p.start);
+    match (slot_a, slot_b) {
+        (Some(a), Some(b)) => a == b,
+        _ => par_a == par_b,
+    }
 }
 
 fn request_mapping_allows(
