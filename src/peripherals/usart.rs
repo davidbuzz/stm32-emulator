@@ -525,7 +525,14 @@ impl Peripheral for Usart {
 
                 trace!("{} write={:02x}", self.name, self.dr as u8);
             }
-            0x0008 => self.brr = value & 0x0000_ffff,
+            0x0008 => {
+                let mut brr = value & 0x0000_ffff;
+                if (self.cr1 & USART_CR1_OVER8) != 0 {
+                    // In OVER8 mode BRR[3] is reserved and kept cleared.
+                    brr &= !(1 << 3);
+                }
+                self.brr = brr;
+            }
             0x000c => {
                 let old_ue = (self.cr1 & USART_CR1_UE) != 0;
                 let old_te = (self.cr1 & USART_CR1_TE) != 0;
