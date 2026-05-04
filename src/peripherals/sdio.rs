@@ -46,6 +46,7 @@ const CMD_SEL_DESEL_CARD: u32 = 7;
 const CMD_SEND_IF_COND: u32 = 8;
 const CMD_SEND_CSD: u32 = 9;
 const CMD_SEND_STATUS: u32 = 13;
+const CMD_STOP_TRANSMISSION: u32 = 12;
 const CMD_SET_BLOCKLEN: u32 = 16;
 const CMD_READ_SINGLE_BLOCK: u32 = 17;
 const CMD_READ_MULTIPLE_BLOCK: u32 = 18;
@@ -174,6 +175,16 @@ impl Sdio {
             CMD_SEND_STATUS => {
                 // SEND_STATUS (CMD13) – R1 response
                 self.set_short_response(cmd, SHORT_R1_TRAN);
+                true
+            }
+            CMD_STOP_TRANSMISSION => {
+                // STOP_TRANSMISSION (CMD12) – terminate multi-block transfer context.
+                self.set_short_response(cmd, SHORT_R1_OK);
+                self.pending_data_cmd = None;
+                self.data_transfer_pending = false;
+                self.fifo_data.clear();
+                self.data_timeout_delay = 0;
+                self.sta |= STA_DATAEND;
                 true
             }
             CMD_READ_SINGLE_BLOCK | CMD_READ_MULTIPLE_BLOCK | CMD_WRITE_BLOCK | CMD_WRITE_MULTIPLE_BLOCK => {
@@ -345,6 +356,18 @@ impl Sdio {
             self.fifo_data.extend(sec);
         }
     }
+
+    fn dcount(&self) -> u32 {
+        if self.pending_data_cmd.is_some() {
+            (self.fifo_data.len() as u32).min(self.dlen)
+        } else {
+            0
+        }
+    }
+
+    fn fifocnt_words(&self) -> u32 {
+        (self.fifo_data.len() as u32) / 4
+    }
 }
 
 impl Peripheral for Sdio {
@@ -383,10 +406,10 @@ impl Peripheral for Sdio {
             0x24 => self.dtimer,
             0x28 => self.dlen,
             0x2C => self.dctrl,
-            0x30 => 0, // DCOUNT
+            0x30 => self.dcount(),
             0x34 => self.sta,
             0x3C => self.mask,
-            0x48 => 0, // FIFOCNT
+            0x48 => self.fifocnt_words(),
             0x80..=0xFF => 0, // FIFO
             _ => 0,
         }
