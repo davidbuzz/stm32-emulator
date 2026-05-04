@@ -39,6 +39,7 @@ const USART_CR1_TE: u32 = 1 << 3;    // Transmitter enable
 const USART_CR1_RE: u32 = 1 << 2;    // Receiver enable
 const USART_CR1_M: u32 = 1 << 12;    // Word length (0=8 data bits, 1=9 data bits)
 const USART_CR1_PCE: u32 = 1 << 10;  // Parity control enable
+const USART_CR1_PS: u32 = 1 << 9;    // Parity selection (0=even, 1=odd)
 const USART_CR1_PEIE: u32 = 1 << 8;  // PE interrupt enable
 const USART_CR1_TXEIE: u32 = 1 << 7; // TXE interrupt enable
 const USART_CR1_TCIE: u32 = 1 << 6;  // TC interrupt enable
@@ -268,6 +269,41 @@ impl Usart {
         }
     }
 
+    fn rx_decode_with_status(&self, raw_byte: u8) -> (u32, u32) {
+        let mut status = 0u32;
+        let mut data = (raw_byte as u32) & self.rx_data_mask();
+
+        if (self.cr1 & USART_CR1_PCE) != 0 {
+            let data_bits: u32 = if (self.cr1 & USART_CR1_M) != 0 { 9 } else { 8 };
+            let payload_bits = data_bits.saturating_sub(1);
+
+            if payload_bits <= 7 {
+                let payload_mask = (1u32 << payload_bits) - 1;
+                let payload = (raw_byte as u32) & payload_mask;
+                let parity_bit = ((raw_byte as u32) >> payload_bits) & 1;
+                let parity_ones = (payload.count_ones() & 1) as u32;
+                let expected_parity_bit = if (self.cr1 & USART_CR1_PS) != 0 {
+                    parity_ones ^ 1
+                } else {
+                    parity_ones
+                };
+
+                if parity_bit != expected_parity_bit {
+                    status |= USART_SR_PE;
+                }
+
+                data = payload;
+            }
+        }
+
+        // LIN break frame samples as all-zero payload in this simplified model.
+        if (self.cr2 & USART_CR2_LINEN) != 0 && raw_byte == 0 {
+            status |= USART_SR_FE;
+        }
+
+        (data & self.rx_data_mask(), status)
+    }
+
     fn service_rx_state(&mut self, sys: &System) {
         if !self.rx_enabled() {
             return;
@@ -301,6 +337,11 @@ impl Usart {
             return;
         };
 
+        let (decoded_data, error_status) = self.rx_decode_with_status(byte);
+        if error_status != 0 {
+            self.sr |= error_status;
+        }
+
         if (self.cr3 & USART_CR3_DMAR) != 0 {
             // With DMAR enabled, stage a single pending byte for DMA consumption.
             // A second byte arriving before DMA drains the first is treated as overrun.
@@ -310,7 +351,7 @@ impl Usart {
                 return;
             }
 
-            self.rx_dma_pending.push_back(byte);
+            self.rx_dma_pending.push_back(decoded_data as u8);
             self.sr |= USART_SR_RXNE;
             self.sr &= !USART_SR_IDLE;
             self.maybe_raise_irq(sys);
@@ -324,7 +365,7 @@ impl Usart {
             return;
         }
 
-        self.dr = (byte as u32) & self.rx_data_mask();
+        self.dr = decoded_data;
         self.sr |= USART_SR_RXNE;
         self.sr &= !USART_SR_IDLE;
         self.maybe_raise_irq(sys);
