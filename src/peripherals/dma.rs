@@ -28,6 +28,7 @@ pub struct Dma {
     lisr: u32,
     hisr: u32,
     arb_cursor: usize,
+    deferred_stream_irq: [bool; 8],
 }
 
 impl Dma {
@@ -121,48 +122,64 @@ impl Dma {
         }
     }
 
-    fn signal_tc(&mut self, sys: &System, stream_idx: usize) {
+    fn signal_tc(&mut self, _sys: &System, stream_idx: usize) {
         self.set_tcif(stream_idx);
         if self.streams[stream_idx].tcie_enabled() {
-            if let Some(irq) = self.stream_irq(stream_idx) {
-                sys.p.nvic.borrow_mut().set_intr_pending(irq);
-            }
+            self.deferred_stream_irq[stream_idx] = true;
         }
     }
 
-    fn signal_ht(&mut self, sys: &System, stream_idx: usize) {
+    fn signal_ht(&mut self, _sys: &System, stream_idx: usize) {
         self.set_htif(stream_idx);
         if self.streams[stream_idx].htie_enabled() {
-            if let Some(irq) = self.stream_irq(stream_idx) {
-                sys.p.nvic.borrow_mut().set_intr_pending(irq);
-            }
+            self.deferred_stream_irq[stream_idx] = true;
         }
     }
 
-    fn signal_te(&mut self, sys: &System, stream_idx: usize) {
+    fn signal_te(&mut self, _sys: &System, stream_idx: usize) {
         self.set_teif(stream_idx);
         if self.streams[stream_idx].teie_enabled() {
-            if let Some(irq) = self.stream_irq(stream_idx) {
-                sys.p.nvic.borrow_mut().set_intr_pending(irq);
-            }
+            self.deferred_stream_irq[stream_idx] = true;
         }
     }
 
-    fn signal_dme(&mut self, sys: &System, stream_idx: usize) {
+    fn signal_dme(&mut self, _sys: &System, stream_idx: usize) {
         self.set_dmeif(stream_idx);
         if self.streams[stream_idx].dmeie_enabled() {
-            if let Some(irq) = self.stream_irq(stream_idx) {
-                sys.p.nvic.borrow_mut().set_intr_pending(irq);
-            }
+            self.deferred_stream_irq[stream_idx] = true;
         }
     }
 
-    fn signal_fe(&mut self, sys: &System, stream_idx: usize) {
+    fn signal_fe(&mut self, _sys: &System, stream_idx: usize) {
         self.set_feif(stream_idx);
         if self.streams[stream_idx].feie_enabled() {
-            if let Some(irq) = self.stream_irq(stream_idx) {
-                sys.p.nvic.borrow_mut().set_intr_pending(irq);
+            self.deferred_stream_irq[stream_idx] = true;
+        }
+    }
+
+    fn stream_has_enabled_pending_event(&self, stream: usize) -> bool {
+        let bank = if stream < 4 { self.lisr } else { self.hisr };
+        let has_tc = self.streams[stream].tcie_enabled() && (bank & tcif_mask(stream)) != 0;
+        let has_ht = self.streams[stream].htie_enabled() && (bank & htif_mask(stream)) != 0;
+        let has_te = self.streams[stream].teie_enabled() && (bank & teif_mask(stream)) != 0;
+        let has_dme = self.streams[stream].dmeie_enabled() && (bank & dmeif_mask(stream)) != 0;
+        let has_fe = self.streams[stream].feie_enabled() && (bank & feif_mask(stream)) != 0;
+        has_tc || has_ht || has_te || has_dme || has_fe
+    }
+
+    fn service_deferred_stream_irqs(&mut self, sys: &System) {
+        for stream in 0..8 {
+            if !self.deferred_stream_irq[stream] {
+                continue;
             }
+
+            if self.stream_has_enabled_pending_event(stream) {
+                if let Some(irq) = self.stream_irq(stream) {
+                    sys.p.nvic.borrow_mut().set_intr_pending(irq);
+                }
+            }
+
+            self.deferred_stream_irq[stream] = false;
         }
     }
 
@@ -283,6 +300,8 @@ impl Dma {
 
 impl Peripheral for Dma {
     fn step(&mut self, sys: &System) {
+        self.service_deferred_stream_irqs(sys);
+
         let name = self.name.clone();
         let mut winner: Option<usize> = None;
         for step_idx in 0..8 {
