@@ -14,6 +14,9 @@ use std::collections::{HashMap, VecDeque};
 use crate::system::System;
 use super::{meta::DeviceMeta, Peripheral};
 
+const RCC_BASE: u64 = 0x4002_3800;
+const RCC_CFGR_OFFSET: u64 = 0x08;
+
 pub struct I2c {
     name: String,
     event_irq: i32,
@@ -34,6 +37,8 @@ pub struct I2c {
     sr1_read_armed_for_addr_clear: bool,
     pending_event_irq: Option<u8>,
     pending_error_irq: Option<u8>,
+    event_delay_div_accum: u32,
+    error_delay_div_accum: u32,
     active_addr: Option<u8>,
     slaves: HashMap<u8, I2cSlave>,
 }
@@ -80,6 +85,8 @@ impl I2c {
             sr1_read_armed_for_addr_clear: false,
             pending_event_irq: None,
             pending_error_irq: None,
+            event_delay_div_accum: 0,
+            error_delay_div_accum: 0,
             active_addr: None,
             slaves: default_i2c_slaves(name),
         }))
@@ -111,6 +118,8 @@ impl I2c {
         self.sr1_read_armed_for_addr_clear = false;
         self.pending_event_irq = None;
         self.pending_error_irq = None;
+        self.event_delay_div_accum = 0;
+        self.error_delay_div_accum = 0;
         self.active_addr = None;
     }
 
@@ -214,6 +223,23 @@ impl I2c {
     fn schedule_error_irq_if_needed(&mut self) {
         if (self.cr2 & I2C_CR2_ITERREN) != 0 && (self.sr1 & I2C_ERROR_MASK) != 0 {
             self.pending_error_irq = Some(0);
+        }
+    }
+
+    fn apb1_divider(&self, sys: &System) -> u32 {
+        let mut cfgr = [0u8; 4];
+        if sys.uc.borrow().mem_read(RCC_BASE + RCC_CFGR_OFFSET, &mut cfgr).is_err() {
+            return 1;
+        }
+
+        let ppre1 = (u32::from_le_bytes(cfgr) >> 10) & 0b111;
+        match ppre1 {
+            0b000..=0b011 => 1,
+            0b100 => 2,
+            0b101 => 4,
+            0b110 => 8,
+            0b111 => 16,
+            _ => 1,
         }
     }
 }
@@ -335,24 +361,40 @@ impl Peripheral for I2c {
     }
 
     fn step(&mut self, sys: &System) {
+        let apb_div = self.apb1_divider(sys).max(1);
+
         if let Some(delay) = self.pending_event_irq.as_mut() {
-            if *delay > 0 {
-                *delay -= 1;
+            self.event_delay_div_accum = self.event_delay_div_accum.saturating_add(1);
+            if self.event_delay_div_accum >= apb_div {
+                self.event_delay_div_accum = 0;
+                if *delay > 0 {
+                    *delay -= 1;
+                }
             }
             if *delay == 0 && (self.cr2 & I2C_CR2_ITEVTEN) != 0 {
                 self.pending_event_irq = None;
+                self.event_delay_div_accum = 0;
                 sys.p.nvic.borrow_mut().set_intr_pending(self.event_irq);
             }
+        } else {
+            self.event_delay_div_accum = 0;
         }
 
         if let Some(delay) = self.pending_error_irq.as_mut() {
-            if *delay > 0 {
-                *delay -= 1;
+            self.error_delay_div_accum = self.error_delay_div_accum.saturating_add(1);
+            if self.error_delay_div_accum >= apb_div {
+                self.error_delay_div_accum = 0;
+                if *delay > 0 {
+                    *delay -= 1;
+                }
             }
             if *delay == 0 && (self.cr2 & I2C_CR2_ITERREN) != 0 {
                 self.pending_error_irq = None;
+                self.error_delay_div_accum = 0;
                 sys.p.nvic.borrow_mut().set_intr_pending(self.error_irq);
             }
+        } else {
+            self.error_delay_div_accum = 0;
         }
     }
 
