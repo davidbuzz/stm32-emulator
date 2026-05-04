@@ -322,6 +322,12 @@ impl Usart {
             status |= USART_SR_LBD;
         }
 
+        // IrDA receives are pulse-shaped and more susceptible to mark-noise in this model.
+        // Treat an all-ones sample as a conservative noise indication.
+        if (self.cr3 & USART_CR3_IREN) != 0 && raw_byte == 0xFF {
+            status |= USART_SR_NE;
+        }
+
         (data & self.rx_data_mask(), status)
     }
 
