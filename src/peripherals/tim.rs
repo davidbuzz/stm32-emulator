@@ -189,6 +189,16 @@ impl Tim {
         }
     }
 
+    fn handle_slave_trigger(&mut self, sys: &System) {
+        // Baseline slave-reset behavior: in SMS=100 (reset mode), trigger event
+        // reinitializes counter and emits an update event.
+        if self.smcr_sms == 0b100 {
+            self.cnt = 0;
+            self.psc_accum = 0;
+            self.trigger_update_event(sys, false);
+        }
+    }
+
     fn tick(&mut self, sys: &System) {
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         let delta = now.saturating_sub(self.last_clk) as u32;
@@ -764,6 +774,7 @@ impl Peripheral for Tim {
                 // Trigger event generation: bit 6 sets TIF and fires trigger IRQ (if enabled).
                 if (value >> 6) & 1 != 0 {
                     self.sr |= 1 << 6; // set TIF
+                    self.handle_slave_trigger(sys);
                     if (self.dier & (1 << 6)) != 0 {
                         if let Some(irq) = self.irq_number() {
                             debug!("{} EGR TG -> trigger event -> IRQ {}", self.name, irq);
