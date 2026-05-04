@@ -93,6 +93,7 @@ pub mod irq {
 
 impl Nvic {
     const FP_EXTENDED_FRAME_RESERVED_WORD: u32 = 0;
+    const IMPLEMENTED_PRIORITY_BITS: u8 = 4;
 
     fn irq_to_pending_bit(irq: i32) -> Option<u32> {
         let bit = IRQ_OFFSET + irq;
@@ -219,21 +220,37 @@ impl Nvic {
         self.priority_fields(raw_prio).0
     }
 
+    fn normalized_priority_byte(raw_prio: u8) -> u8 {
+        // STM32F4 implements only the top 4 priority bits in each 8-bit field.
+        raw_prio & 0xF0
+    }
+
+    fn priority_bit_split(&self) -> (u8, u8) {
+        // CMSIS split adapted for __NVIC_PRIO_BITS=4 and PRIGROUP in AIRCR.
+        // preemptBits = min(7 - PRIGROUP, implemented_bits)
+        // subBits = max(0, PRIGROUP - (7 - implemented_bits))
+        let pg = self.priority_group.min(7);
+        let preempt_bits = (7u8.saturating_sub(pg)).min(Self::IMPLEMENTED_PRIORITY_BITS);
+        let sub_bits = pg.saturating_sub(7u8.saturating_sub(Self::IMPLEMENTED_PRIORITY_BITS));
+        (preempt_bits, sub_bits)
+    }
+
     fn priority_fields(&self, raw_prio: u8) -> (u8, u8) {
-        // PRIGROUP: split priority byte into preemption class and subpriority.
-        let sub_bits = self.priority_group.min(7);
-        let preempt = raw_prio >> sub_bits;
+        let (_preempt_bits, sub_bits) = self.priority_bit_split();
+        let effective = Self::normalized_priority_byte(raw_prio) >> (8 - Self::IMPLEMENTED_PRIORITY_BITS);
+        let preempt = effective >> sub_bits;
         let sub = if sub_bits == 0 {
             0
         } else {
-            raw_prio & ((1u8 << sub_bits) - 1)
+            effective & ((1u8 << sub_bits) - 1)
         };
         (preempt, sub)
     }
 
     fn is_external_irq_dispatchable(&self, irq: i32, basepri: u32, current_active_prio: Option<u8>) -> bool {
-        let raw_prio = self.irq_priority_value(irq);
+        let raw_prio = Self::normalized_priority_byte(self.irq_priority_value(irq));
         let prio = self.preempt_priority_value(raw_prio);
+        let basepri = basepri & 0xF0;
 
         // BASEPRI masks priorities numerically >= BASEPRI.
         if basepri != 0 && (raw_prio as u32) >= basepri {
@@ -262,8 +279,9 @@ impl Nvic {
             return false;
         }
 
-        let raw_prio = self.system_irq_priority_value(irq);
+        let raw_prio = Self::normalized_priority_byte(self.system_irq_priority_value(irq));
         let prio = self.preempt_priority_value(raw_prio);
+        let basepri = basepri & 0xF0;
 
         // BASEPRI masks configurable exceptions and external IRQs.
         if basepri != 0 && irq > -13 && (raw_prio as u32) >= basepri {
