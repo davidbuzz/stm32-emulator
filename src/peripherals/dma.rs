@@ -7,7 +7,7 @@
 // Critical for this emulator: firmware uses DMA completion flags and IRQs for boot/runtime.
 // Current model: per-beat PINC/MINC, circular-mode NDTR reload, EN retrigger guard,
 // and TC/HT/TE/DME/FE class flags.
-// Still incomplete: FIFO thresholds/behavioral depth, double-buffer mode details, stream arbitration.
+// Still incomplete: full RM-accurate FIFO sequencing under all edge races, double-buffer details.
 // Datasheet/reference anchors: STM32F4 RM DMA chapter and cubeblack/STM32F4_DMA.md.
 
 use crate::util::UniErr;
@@ -20,6 +20,36 @@ const USART_RX_IDLE_DISABLE_DELAY: u64 = 20_000;
 const SDIO_DMA_DEFER_DELAY: u64 = 64;
 const DMA_EN_DISABLE_DELAY: u64 = 8;
 const DMA_FIFO_CAPACITY_BYTES: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum FifoOccupancy {
+    #[default]
+    Empty = 0,           // 0 bytes
+    Quarter = 1,         // 0 < fill < 1/4 of FIFO
+    OneQuarter = 2,      // fill == 1/4 of FIFO
+    Half = 3,            // 1/4 < fill < 1/2 of FIFO
+    ThreeQuarters = 4,   // fill == 3/4 of FIFO or between 1/2 and 3/4
+    Full = 5,            // fill >= capacity, ERROR state
+}
+
+impl FifoOccupancy {
+    fn from_bytes(bytes: usize, capacity: usize) -> Self {
+        use FifoOccupancy::*;
+        if bytes >= capacity {
+            Full
+        } else if bytes * 4 >= capacity * 3 {
+            ThreeQuarters
+        } else if bytes * 2 >= capacity {
+            Half
+        } else if bytes * 4 == capacity {
+            OneQuarter
+        } else if bytes > 0 {
+            Quarter
+        } else {
+            Empty
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Dma {
@@ -600,8 +630,9 @@ struct Stream {
     deferred_usart_rx: bool,
     deferred_since: u64,
     disable_requested_at: Option<u64>,
-    // FIFO state tracking for threshold violation detection
+    // FIFO state tracking: bytes filled and occupancy classification.
     fifo_bytes: usize,
+    fifo_occupancy: FifoOccupancy,
     fifo_error_pending: bool,
 }
 
@@ -824,27 +855,18 @@ impl Stream {
             return 0b100;
         }
 
-        if self.fifo_bytes == 0 {
-            return 0b100;
+        use FifoOccupancy::*;
+        match self.fifo_occupancy {
+            Empty => 0b100,
+            Quarter | OneQuarter => 0b000,
+            Half => 0b001,
+            ThreeQuarters => 0b010,
+            Full => 0b101,
         }
+    }
 
-        if self.fifo_bytes >= DMA_FIFO_CAPACITY_BYTES {
-            return 0b101;
-        }
-
-        if self.fifo_bytes < 4 {
-            return 0b000;
-        }
-
-        if self.fifo_bytes < 8 {
-            return 0b001;
-        }
-
-        if self.fifo_bytes < 12 {
-            return 0b010;
-        }
-
-        return 0b011;
+    fn update_fifo_occupancy(&mut self) {
+        self.fifo_occupancy = FifoOccupancy::from_bytes(self.fifo_bytes, DMA_FIFO_CAPACITY_BYTES);
     }
 
     /// Perform one complete DMA transfer respecting PINC/MINC.
@@ -993,6 +1015,7 @@ impl Stream {
                         if self.ndtr > beats as u32 && self.fifo_bytes == 0 {
                             self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, std::cmp::max(1, psize));
                         }
+                        self.update_fifo_occupancy();
                     }
                 }
 
@@ -1049,6 +1072,7 @@ impl Stream {
                         if self.ndtr > beats as u32 && self.fifo_bytes == 0 {
                             self.fifo_bytes = std::cmp::min(DMA_FIFO_CAPACITY_BYTES, std::cmp::max(1, msize));
                         }
+                        self.update_fifo_occupancy();
                     }
                 }
 
@@ -1089,6 +1113,7 @@ impl Stream {
         if ok && self.fifo_enabled() {
             if self.ndtr == 0 {
                 self.fifo_bytes = 0;
+                self.update_fifo_occupancy();
             }
         }
 
@@ -1150,6 +1175,7 @@ impl Stream {
                     self.cr = value;
                     self.deferred_usart_rx = false;
                     self.fifo_bytes = 0;
+                    self.update_fifo_occupancy();
                     return StreamWriteResult::Noop;
                 }
 
@@ -1169,6 +1195,7 @@ impl Stream {
                 if !new_enabled {
                     self.deferred_usart_rx = false;
                     self.fifo_bytes = 0;
+                    self.update_fifo_occupancy();
                     return StreamWriteResult::Noop;
                 }
 
