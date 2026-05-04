@@ -30,7 +30,9 @@ const USART_SR_FE: u32 = 1 << 1;    // Framing error
 const USART_SR_PE: u32 = 1 << 0;    // Parity error
 const USART_CR3_DMAT: u32 = 1 << 7;  // Transmit DMA enable
 const USART_CR3_DMAR: u32 = 1 << 6;  // Receive DMA enable
+const USART_CR3_SCEN: u32 = 1 << 5;  // Smartcard mode enable
 const USART_CR3_HDSEL: u32 = 1 << 3; // Half-duplex selection
+const USART_CR3_IREN: u32 = 1 << 1;  // IrDA mode enable
 const USART_CR3_EIE: u32 = 1 << 0;   // Error interrupt enable
 const USART_CR1_UE: u32 = 1 << 13;   // USART enable
 const USART_CR1_TE: u32 = 1 << 3;    // Transmitter enable
@@ -384,6 +386,17 @@ impl Peripheral for Usart {
             0x0014 => {
                 // Persist CR3 state; DMAT/DMAR are consumed in DMA hooks.
                 self.cr3 = value;
+
+                // Basic STM32 mode interaction modeling:
+                // - HDSEL, SCEN, and IREN are mutually exclusive families.
+                // - IrDA/Smartcard paths are modeled as non-DMA serial paths here.
+                if (self.cr3 & USART_CR3_HDSEL) != 0 {
+                    self.cr3 &= !(USART_CR3_SCEN | USART_CR3_IREN);
+                } else if (self.cr3 & (USART_CR3_SCEN | USART_CR3_IREN)) != 0 {
+                    self.cr3 &= !USART_CR3_HDSEL;
+                    self.cr3 &= !(USART_CR3_DMAR | USART_CR3_DMAT);
+                }
+
                 if !self.rx_enabled() {
                     self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
                     self.rx_dma_pending.clear();
