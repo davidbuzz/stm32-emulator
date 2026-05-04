@@ -307,6 +307,11 @@ impl Peripheral for Dma {
                     winner = Some(i);
                     break;
                 }
+                StreamStepResult::FifoError => {
+                    self.signal_fe(sys, i);
+                    winner = Some(i);
+                    break;
+                }
                 StreamStepResult::TransferError => {
                     self.signal_mode_error(sys, i);
                     winner = Some(i);
@@ -469,6 +474,20 @@ struct Stream {
 }
 
 impl Stream {
+    fn defer_delay_for_desc(&self, peri_desc: &str) -> u64 {
+        if self.pfctrl() {
+            0
+        } else if is_usart_dr_request(peri_desc) {
+            USART_RX_IDLE_DISABLE_DELAY
+        } else if self.fifo_enabled() && self.dir() != Dir::MemCopy {
+            // FIFO-enabled peripheral streams are request paced and should be serviced
+            // promptly in arbitration rounds rather than waiting on SDIO-style idle windows.
+            0
+        } else {
+            SDIO_DMA_DEFER_DELAY
+        }
+    }
+
     fn ready_for_step(&self, sys: &System) -> bool {
         if (self.cr & 1) == 0 || self.ndtr == 0 {
             return false;
@@ -484,13 +503,7 @@ impl Stream {
 
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         let peri_desc = sys.p.addr_desc(self.par);
-        let defer_delay = if self.pfctrl() {
-            0
-        } else if is_usart_dr_request(&peri_desc) {
-            USART_RX_IDLE_DISABLE_DELAY
-        } else {
-            SDIO_DMA_DEFER_DELAY
-        };
+        let defer_delay = self.defer_delay_for_desc(&peri_desc);
 
         now.saturating_sub(self.deferred_since) >= defer_delay
     }
@@ -1098,6 +1111,11 @@ impl Stream {
             return true;
         }
 
+        // FIFO-enabled peripheral transfers are request-paced in hardware.
+        if self.fifo_enabled() && self.dir() != Dir::MemCopy {
+            return true;
+        }
+
         if self.dir() != Dir::Read {
             return false;
         }
@@ -1113,13 +1131,7 @@ impl Stream {
 
         let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
         let peri_desc = sys.p.addr_desc(self.par);
-        let defer_delay = if self.pfctrl() {
-            0
-        } else if is_usart_dr_request(&peri_desc) {
-            USART_RX_IDLE_DISABLE_DELAY
-        } else {
-            SDIO_DMA_DEFER_DELAY
-        };
+        let defer_delay = self.defer_delay_for_desc(&peri_desc);
         if now.saturating_sub(self.deferred_since) < defer_delay {
             return StreamStepResult::Noop;
         }
@@ -1128,6 +1140,13 @@ impl Stream {
         // then decide based on circular mode whether to reload or finish.
         let chunk_beats = self.transfer_beats_per_chunk();
         let ok = self.do_xfer(dma_name, stream_idx, sys, Some(chunk_beats));
+
+        if self.fifo_error_pending {
+            self.fifo_error_pending = false;
+            self.deferred_usart_rx = false;
+            return StreamStepResult::FifoError;
+        }
+
         // HT fires if multi-beat transfer (initial_ndtr > 1)
         let half = ok.half;
 
@@ -1180,6 +1199,7 @@ enum StreamStepResult {
     Noop,
     Progress { half: bool },
     Completed { half: bool },
+    FifoError,
     TransferError,
 }
 
