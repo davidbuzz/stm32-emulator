@@ -44,6 +44,8 @@ const USART_CR1_TXEIE: u32 = 1 << 7; // TXE interrupt enable
 const USART_CR1_TCIE: u32 = 1 << 6;  // TC interrupt enable
 const USART_CR1_RXNEIE: u32 = 1 << 5;// RXNE interrupt enable
 const USART_CR2_STOP_MASK: u32 = 0b11 << 12;
+const USART_CR2_LINEN: u32 = 1 << 14;
+const USART_CR2_CLKEN: u32 = 1 << 11;
 
 // Default TX latency used when BRR has not been configured yet.
 const TX_COMPLETION_DELAY_DEFAULT: u64 = 10;
@@ -95,6 +97,52 @@ impl Usart {
         }
     }
 
+    fn effective_stop_half_bits(&self) -> u64 {
+        if (self.cr3 & USART_CR3_SCEN) != 0 {
+            // Smartcard mode uses 1.5 stop bits regardless of programmed STOP field.
+            return 3;
+        }
+
+        match (self.cr2 & USART_CR2_STOP_MASK) >> 12 {
+            0b00 => 2u64, // 1 stop bit
+            0b01 => 1u64, // 0.5 stop bit
+            0b10 => 4u64, // 2 stop bits
+            0b11 => 3u64, // 1.5 stop bits
+            _ => 2u64,
+        }
+    }
+
+    fn normalize_mode_registers(&mut self) {
+        // LIN is asynchronous-only in this model: no synchronous clock output and 1 stop bit.
+        if (self.cr2 & USART_CR2_LINEN) != 0 {
+            self.cr2 &= !USART_CR2_CLKEN;
+            self.cr2 &= !USART_CR2_STOP_MASK;
+        }
+
+        // HDSEL conflicts with Smartcard and IrDA families.
+        if (self.cr3 & USART_CR3_HDSEL) != 0 {
+            self.cr3 &= !(USART_CR3_SCEN | USART_CR3_IREN);
+        }
+
+        // Smartcard/IrDA are non-DMA serial paths in this emulator.
+        if (self.cr3 & (USART_CR3_SCEN | USART_CR3_IREN)) != 0 {
+            self.cr3 &= !USART_CR3_HDSEL;
+            self.cr3 &= !(USART_CR3_DMAR | USART_CR3_DMAT);
+            self.cr2 &= !USART_CR2_LINEN;
+        }
+
+        if (self.cr3 & USART_CR3_SCEN) != 0 {
+            // Smartcard mode enforces synchronous clock and 1.5 stop bits.
+            self.cr2 |= USART_CR2_CLKEN;
+            self.cr2 = (self.cr2 & !USART_CR2_STOP_MASK) | (0b11 << 12);
+        }
+
+        if (self.cr3 & USART_CR3_IREN) != 0 {
+            // IrDA mode is asynchronous and does not use CLKEN.
+            self.cr2 &= !USART_CR2_CLKEN;
+        }
+    }
+
     fn tx_completion_delay(&self, sys: &System) -> u64 {
         // BRR[15:4]=mantissa, BRR[3:0]=fraction (oversampling by 16 path).
         // Use a bounded instruction-latency approximation so BRR changes affect
@@ -113,13 +161,7 @@ impl Usart {
         // programming (word length, parity, stop bits) influences TXE/TC timing.
         let data_bits = if (self.cr1 & USART_CR1_M) != 0 { 9u64 } else { 8u64 };
         let parity_bits = if (self.cr1 & USART_CR1_PCE) != 0 { 1u64 } else { 0u64 };
-        let stop_half_bits = match (self.cr2 & USART_CR2_STOP_MASK) >> 12 {
-            0b00 => 2u64, // 1 stop bit
-            0b01 => 1u64, // 0.5 stop bit
-            0b10 => 4u64, // 2 stop bits
-            0b11 => 3u64, // 1.5 stop bits
-            _ => 2u64,
-        };
+        let stop_half_bits = self.effective_stop_half_bits();
         let frame_half_bits = 2u64 + (data_bits * 2) + (parity_bits * 2) + stop_half_bits;
         let raw_delay = (base_delay.saturating_mul(frame_half_bits)).saturating_div(20);
 
@@ -412,20 +454,12 @@ impl Peripheral for Usart {
             0x0010 => {
                 // Persist full CR2 state, but keep only defined stop-bit field in behavior.
                 self.cr2 = value;
+                self.normalize_mode_registers();
             }
             0x0014 => {
                 // Persist CR3 state; DMAT/DMAR are consumed in DMA hooks.
                 self.cr3 = value;
-
-                // Basic STM32 mode interaction modeling:
-                // - HDSEL, SCEN, and IREN are mutually exclusive families.
-                // - IrDA/Smartcard paths are modeled as non-DMA serial paths here.
-                if (self.cr3 & USART_CR3_HDSEL) != 0 {
-                    self.cr3 &= !(USART_CR3_SCEN | USART_CR3_IREN);
-                } else if (self.cr3 & (USART_CR3_SCEN | USART_CR3_IREN)) != 0 {
-                    self.cr3 &= !USART_CR3_HDSEL;
-                    self.cr3 &= !(USART_CR3_DMAR | USART_CR3_DMAT);
-                }
+                self.normalize_mode_registers();
 
                 if !self.rx_enabled() {
                     self.sr &= !(USART_SR_RXNE | USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE);
