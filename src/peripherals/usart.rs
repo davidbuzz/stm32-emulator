@@ -166,7 +166,18 @@ impl Usart {
         let parity_bits = if (self.cr1 & USART_CR1_PCE) != 0 { 1u64 } else { 0u64 };
         let stop_half_bits = self.effective_stop_half_bits();
         let frame_half_bits = 2u64 + (data_bits * 2) + (parity_bits * 2) + stop_half_bits;
-        let raw_delay = (base_delay.saturating_mul(frame_half_bits)).saturating_div(20);
+        let mut raw_delay = (base_delay.saturating_mul(frame_half_bits)).saturating_div(20);
+
+        if (self.cr3 & USART_CR3_SCEN) != 0 {
+            // Smartcard mode honors guard-time in GTPR[15:8].
+            let guard_time = ((self.gtpr >> 8) & 0xFF) as u64;
+            raw_delay = raw_delay.saturating_add(base_delay.saturating_mul(guard_time).saturating_div(16));
+        }
+
+        if (self.cr3 & USART_CR3_IREN) != 0 {
+            // IrDA pulse-shaping path has a small additional serialization delay.
+            raw_delay = raw_delay.saturating_add(base_delay.saturating_div(8));
+        }
 
         let apb_div = self.apb_clock_divider(sys) as u64;
         raw_delay.saturating_mul(apb_div).clamp(2, 256)
@@ -175,7 +186,14 @@ impl Usart {
     fn rx_completion_delay(&self, sys: &System) -> u64 {
         // Use a bounded derivative of TX timing for receive sampling latency.
         // This keeps RX path BRR-sensitive without creating long stalls.
-        self.tx_completion_delay(sys).saturating_div(2).clamp(1, 128)
+        let mut delay = self.tx_completion_delay(sys).saturating_div(2);
+        if (self.cr3 & USART_CR3_SCEN) != 0 {
+            delay = delay.saturating_add(((self.gtpr >> 8) & 0xFF) as u64);
+        }
+        if (self.cr3 & USART_CR3_IREN) != 0 {
+            delay = delay.saturating_add(1);
+        }
+        delay.clamp(1, 128)
     }
 
     fn apb_clock_divider(&self, sys: &System) -> u32 {
