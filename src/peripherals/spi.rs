@@ -18,6 +18,7 @@ use std::{rc::Rc, cell::RefCell};
 use std::collections::VecDeque;
 
 const SPI_CR1_CPHA: u32 = 1 << 0;
+const SPI_CR1_CPOL: u32 = 1 << 1;
 const SPI_CR1_MSTR: u32 = 1 << 2;
 const SPI_CR1_SPE: u32 = 1 << 6;
 const SPI_CR1_SSM: u32 = 1 << 9;
@@ -209,6 +210,10 @@ impl Peripheral for Spi {
         if offset != 0x000C {
             return;
         }
+        if self.rxne {
+            // DMA write while previous RX data is still unread triggers overrun.
+            self.ovr = true;
+        }
         let rx_bytes: Vec<u8> = value.into_iter().map(|v| {
             let rx = self.ext_device.as_ref()
                 .map(|d| d.borrow_mut().read(sys, ()) as u8)
@@ -324,11 +329,13 @@ impl Peripheral for Spi {
                 self.sr |= SPI_SR_BSY;
 
                 let cpha = (self.cr1 & SPI_CR1_CPHA) != 0;
-                let (rx_buffer, tx_first) = if cpha {
-                    // CPHA=1 samples later in the cycle: write first, then read response.
+                let cpol = (self.cr1 & SPI_CR1_CPOL) != 0;
+                let (rx_buffer, tx_first) = if cpha ^ cpol {
+                    // CPOL participates in this simplified edge model: effective late-sample
+                    // phase writes first, then reads response.
                     (true, true)
                 } else {
-                    // CPHA=0 uses existing behavior: read first, then shift out MOSI.
+                    // Effective early-sample phase reads first, then shifts out MOSI.
                     (true, false)
                 };
 
