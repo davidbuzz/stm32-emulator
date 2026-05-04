@@ -500,9 +500,9 @@ impl Peripheral for Dma {
 
                         let owner_dir = self.streams[owner].dir();
                         let owner_pl = self.streams[owner].priority();
-                        // Keep full-duplex read/write stream pair sharing for SPI-style transfers.
-                        let spi_peripheral = peri_name.map(|n| n.starts_with("SPI")).unwrap_or(false);
-                        let full_duplex_pair = spi_peripheral
+                        // Keep opposite-direction stream sharing for peripherals with
+                        // independent RX/TX request paths.
+                        let full_duplex_pair = supports_bidirectional_dma_sharing(peri_name)
                             && ((new_dir == Dir::Read && owner_dir == Dir::Write)
                                 || (new_dir == Dir::Write && owner_dir == Dir::Read));
                         if full_duplex_pair {
@@ -1383,6 +1383,17 @@ fn is_sdio_fifo_request(peri_desc: &str) -> bool {
 fn peripheral_name_from_desc(desc: &str) -> Option<&str> {
     let (_, tail) = desc.split_once("peri=")?;
     Some(tail.split_whitespace().next().unwrap_or_default())
+}
+
+fn supports_bidirectional_dma_sharing(peri_name: Option<&str>) -> bool {
+    match peri_name {
+        Some(name)
+            if name.starts_with("SPI")
+                || name.starts_with("USART")
+                || name.starts_with("UART")
+                || name.starts_with("I2C") => true,
+        _ => false,
+    }
 }
 
 fn same_peripheral_request_target(
