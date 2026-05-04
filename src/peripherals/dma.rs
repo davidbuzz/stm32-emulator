@@ -29,9 +29,32 @@ pub struct Dma {
     hisr: u32,
     arb_cursor: usize,
     deferred_stream_irq: [bool; 8],
+    starvation_age: [u8; 8],
 }
 
 impl Dma {
+    fn ready_without_conflict_gate(&self, sys: &System, stream_idx: usize) -> bool {
+        if stream_idx >= self.streams.len() {
+            return false;
+        }
+        self.streams[stream_idx].ready_for_step(sys)
+    }
+
+    fn update_starvation_age(&mut self, sys: &System, winner: Option<usize>) {
+        for i in 0..8 {
+            if Some(i) == winner {
+                self.starvation_age[i] = 0;
+                continue;
+            }
+
+            if self.ready_without_conflict_gate(sys, i) {
+                self.starvation_age[i] = self.starvation_age[i].saturating_add(1);
+            } else {
+                self.starvation_age[i] = 0;
+            }
+        }
+    }
+
     pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
         if name.starts_with("DMA") {
             let name = name.to_string();
@@ -261,6 +284,10 @@ impl Dma {
             }
 
             if owner_pl == cand_pl {
+                // Let long-waiting contenders win equal-priority conflicts.
+                if self.starvation_age[stream_idx] > self.starvation_age[owner_idx] {
+                    continue;
+                }
                 let owner_rank = (owner_idx + 8 - (self.arb_cursor % 8)) % 8;
                 let cand_rank = (stream_idx + 8 - (self.arb_cursor % 8)) % 8;
                 if owner_rank < cand_rank {
@@ -349,6 +376,7 @@ impl Peripheral for Dma {
             }
         }
 
+        self.update_starvation_age(sys, winner);
         self.arb_cursor = winner.map(|idx| (idx + 1) % 8)
             .unwrap_or((self.arb_cursor + 1) % 8);
     }
@@ -448,6 +476,10 @@ impl Peripheral for Dma {
                         } else if owner_pl < new_pl {
                             preempted_owners.push(owner);
                         } else {
+                            if self.starvation_age[i] > self.starvation_age[owner] {
+                                preempted_owners.push(owner);
+                                continue;
+                            }
                             let owner_rank = (owner + 8 - (self.arb_cursor % 8)) % 8;
                             let new_rank = (i + 8 - (self.arb_cursor % 8)) % 8;
                             if owner_rank < new_rank {
@@ -456,6 +488,7 @@ impl Peripheral for Dma {
                                 preempted_owners.push(owner);
                             }
                         }
+
                     }
 
                     if !blocking_owners.is_empty() {
