@@ -85,6 +85,7 @@ pub struct Sdio {
     data_timeout_delay: u8,
     failed_retries: u32,
     is_ejected: bool,
+    app_cmd_armed: bool,
     pending_data_cmd: Option<u32>,
     pending_sector: u32,
     fifo_data: VecDeque<u8>,
@@ -129,13 +130,18 @@ impl Sdio {
             CMD_APP_CMD => {
                 // APP_CMD (CMD55) – R1 response (short format)
                 self.set_short_response(cmd, SHORT_R1_OK);
+                self.app_cmd_armed = true;
                 true
             }
             CMD_APP_OP_COND => {
+                if !self.app_cmd_armed {
+                    return false;
+                }
                 // APP_OP_COND (ACMD41) – R3 response (short format, no CRC)
                 // Also set CMDSENT since APP_OP_COND doesn't require a formal command end
                 self.set_short_response(cmd, SHORT_R3_OCR_READY_HC);
                 self.sta |= STA_CMDSENT;
+                self.app_cmd_armed = false;
                 true
             }
             CMD_ALL_SEND_CID => {
@@ -514,6 +520,9 @@ impl Peripheral for Sdio {
                 self.sta &= !(STA_CMDSENT | STA_CMDREND | STA_CTIMEOUT | STA_CCRCFAIL);
                 if value & CMD_CPSMEN != 0 {
                     let cmd = value & 0x3F;
+                    if cmd != CMD_APP_OP_COND && cmd != CMD_APP_CMD {
+                        self.app_cmd_armed = false;
+                    }
                     if self.handle_known_command(cmd) {
                         self.maybe_raise_irq(_sys);
                         debug!(
