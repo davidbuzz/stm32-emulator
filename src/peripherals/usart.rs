@@ -36,6 +36,7 @@ const USART_CR3_HDSEL: u32 = 1 << 3; // Half-duplex selection
 const USART_CR3_IREN: u32 = 1 << 1;  // IrDA mode enable
 const USART_CR3_EIE: u32 = 1 << 0;   // Error interrupt enable
 const USART_CR1_UE: u32 = 1 << 13;   // USART enable
+const USART_CR1_OVER8: u32 = 1 << 15;// Oversampling mode (0=16, 1=8)
 const USART_CR1_TE: u32 = 1 << 3;    // Transmitter enable
 const USART_CR1_RE: u32 = 1 << 2;    // Receiver enable
 const USART_CR1_M: u32 = 1 << 12;    // Word length (0=8 data bits, 1=9 data bits)
@@ -149,7 +150,9 @@ impl Usart {
     }
 
     fn tx_completion_delay(&self, sys: &System) -> u64 {
-        // BRR[15:4]=mantissa, BRR[3:0]=fraction (oversampling by 16 path).
+        // BRR[15:4]=mantissa, BRR fraction depends on OVER8:
+        // - OVER8=0: BRR[3:0] fraction/16
+        // - OVER8=1: BRR[2:0] fraction/8 (bit3 ignored)
         // Use a bounded instruction-latency approximation so BRR changes affect
         // TXE/TC timing without stalling execution at very low baud values.
         if self.brr == 0 {
@@ -157,8 +160,13 @@ impl Usart {
         }
 
         let mantissa = (self.brr >> 4) & 0x0fff;
-        let fraction = self.brr & 0x000f;
-        let usartdiv_x16 = (mantissa << 4) | fraction;
+        let usartdiv_x16 = if (self.cr1 & USART_CR1_OVER8) != 0 {
+            let fraction_over8 = self.brr & 0x0007;
+            (mantissa << 4) | (fraction_over8 << 1)
+        } else {
+            let fraction_over16 = self.brr & 0x000f;
+            (mantissa << 4) | fraction_over16
+        };
         // Base delay from BRR divider.
         let base_delay = (usartdiv_x16 as u64) / 2;
 
