@@ -214,13 +214,26 @@ impl Peripheral for Spi {
             // DMA write while previous RX data is still unread triggers overrun.
             self.ovr = true;
         }
+        let cpha = (self.cr1 & SPI_CR1_CPHA) != 0;
+        let cpol = (self.cr1 & SPI_CR1_CPOL) != 0;
+        let tx_first = cpha ^ cpol;
         let rx_bytes: Vec<u8> = value.into_iter().map(|v| {
-            let rx = self.ext_device.as_ref()
-                .map(|d| d.borrow_mut().read(sys, ()) as u8)
-                .unwrap_or(0xFF);
-            if let Some(d) = &self.ext_device {
-                d.borrow_mut().write(sys, (), v);
-            }
+            let rx = if tx_first {
+                if let Some(d) = &self.ext_device {
+                    d.borrow_mut().write(sys, (), v);
+                    d.borrow_mut().read(sys, ()) as u8
+                } else {
+                    0xFF
+                }
+            } else {
+                let sampled = self.ext_device.as_ref()
+                    .map(|d| d.borrow_mut().read(sys, ()) as u8)
+                    .unwrap_or(0xFF);
+                if let Some(d) = &self.ext_device {
+                    d.borrow_mut().write(sys, (), v);
+                }
+                sampled
+            };
             self.update_crc_regs(v as u16, rx as u16, 8);
             rx
         }).collect();
