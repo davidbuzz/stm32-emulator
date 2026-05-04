@@ -47,6 +47,8 @@ const USART_CR2_STOP_MASK: u32 = 0b11 << 12;
 
 // Default TX latency used when BRR has not been configured yet.
 const TX_COMPLETION_DELAY_DEFAULT: u64 = 10;
+const RCC_BASE: u64 = 0x4002_3800;
+const RCC_CFGR_OFFSET: u64 = 0x08;
 
 #[derive(Default)]
 pub struct Usart {
@@ -93,7 +95,7 @@ impl Usart {
         }
     }
 
-    fn tx_completion_delay(&self) -> u64 {
+    fn tx_completion_delay(&self, sys: &System) -> u64 {
         // BRR[15:4]=mantissa, BRR[3:0]=fraction (oversampling by 16 path).
         // Use a bounded instruction-latency approximation so BRR changes affect
         // TXE/TC timing without stalling execution at very low baud values.
@@ -121,7 +123,35 @@ impl Usart {
         let frame_half_bits = 2u64 + (data_bits * 2) + (parity_bits * 2) + stop_half_bits;
         let raw_delay = (base_delay.saturating_mul(frame_half_bits)).saturating_div(20);
 
-        raw_delay.clamp(2, 128)
+        let apb_div = self.apb_clock_divider(sys) as u64;
+        raw_delay.saturating_mul(apb_div).clamp(2, 256)
+    }
+
+    fn apb_clock_divider(&self, sys: &System) -> u32 {
+        let mut cfgr = [0u8; 4];
+        if sys.uc.borrow().mem_read(RCC_BASE + RCC_CFGR_OFFSET, &mut cfgr).is_err() {
+            return 1;
+        }
+        let cfgr = u32::from_le_bytes(cfgr);
+        let ppre1 = (cfgr >> 10) & 0b111;
+        let ppre2 = (cfgr >> 13) & 0b111;
+
+        let decode = |ppre: u32| -> u32 {
+            match ppre {
+                0b000..=0b011 => 1,
+                0b100 => 2,
+                0b101 => 4,
+                0b110 => 8,
+                0b111 => 16,
+                _ => 1,
+            }
+        };
+
+        if self.name.starts_with("USART1") || self.name.starts_with("USART6") {
+            decode(ppre2)
+        } else {
+            decode(ppre1)
+        }
     }
 
     fn tx_enabled(&self) -> bool {
@@ -147,7 +177,7 @@ impl Usart {
     fn service_tx_state(&mut self, sys: &System) {
         if let Some(tx_since) = self.tx_active_since {
             let now = NUM_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
-            if now.saturating_sub(tx_since) >= self.tx_completion_delay() {
+            if now.saturating_sub(tx_since) >= self.tx_completion_delay(sys) {
                 // TX completion delay expired: set both TXE and TC
                 self.sr |= USART_SR_TXE | USART_SR_TC;
                 self.tx_active_since = None;
