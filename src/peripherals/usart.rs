@@ -245,7 +245,10 @@ impl Usart {
 
         // In half-duplex mode, model single-wire directionality: when TX is active,
         // do not accept RX traffic on the same line.
-        if (self.cr3 & USART_CR3_HDSEL) != 0 && (self.cr1 & USART_CR1_TE) != 0 {
+        if (self.cr3 & USART_CR3_HDSEL) != 0
+            && (self.cr1 & USART_CR1_TE) != 0
+            && self.tx_active_since.is_some()
+        {
             return false;
         }
 
