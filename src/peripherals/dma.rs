@@ -55,6 +55,38 @@ impl Dma {
         }
     }
 
+    fn pick_step_winner(&self, sys: &System) -> Option<usize> {
+        let mut best: Option<(usize, u8, u8, usize)> = None;
+
+        for step_idx in 0..8 {
+            let i = (self.arb_cursor + step_idx) % 8;
+            if self.stream_blocked_by_active_owner(sys, i) {
+                continue;
+            }
+            if !self.ready_without_conflict_gate(sys, i) {
+                continue;
+            }
+
+            let pl = self.streams[i].priority();
+            let age = self.starvation_age[i];
+            let rank = (i + 8 - (self.arb_cursor % 8)) % 8;
+
+            match best {
+                None => best = Some((i, pl, age, rank)),
+                Some((_, best_pl, best_age, best_rank)) => {
+                    let better = pl > best_pl
+                        || (pl == best_pl && age > best_age)
+                        || (pl == best_pl && age == best_age && rank < best_rank);
+                    if better {
+                        best = Some((i, pl, age, rank));
+                    }
+                }
+            }
+        }
+
+        best.map(|(idx, _, _, _)| idx)
+    }
+
     pub fn new(name: &str) -> Option<Box<dyn Peripheral>> {
         if name.starts_with("DMA") {
             let name = name.to_string();
@@ -340,19 +372,13 @@ impl Peripheral for Dma {
 
         let name = self.name.clone();
         let mut winner: Option<usize> = None;
-        for step_idx in 0..8 {
-            let i = (self.arb_cursor + step_idx) % 8;
-            if self.stream_blocked_by_active_owner(sys, i) {
-                continue;
-            }
-
+        if let Some(i) = self.pick_step_winner(sys) {
             match self.streams[i].step_deferred(&name, i, sys) {
                 StreamStepResult::Progress { half } => {
                     if half {
                         self.signal_ht(sys, i);
                     }
                     winner = Some(i);
-                    break;
                 }
                 StreamStepResult::Completed { half } => {
                     if half {
@@ -360,19 +386,18 @@ impl Peripheral for Dma {
                     }
                     self.signal_tc(sys, i);
                     winner = Some(i);
-                    break;
                 }
                 StreamStepResult::FifoError => {
                     self.signal_fe(sys, i);
                     winner = Some(i);
-                    break;
                 }
                 StreamStepResult::TransferError => {
                     self.signal_mode_error(sys, i);
                     winner = Some(i);
-                    break;
                 }
-                StreamStepResult::Noop => {}
+                StreamStepResult::Noop => {
+                    winner = None;
+                }
             }
         }
 
