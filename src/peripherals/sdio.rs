@@ -88,6 +88,7 @@ pub struct Sdio {
     pending_data_cmd: Option<u32>,
     pending_sector: u32,
     fifo_data: VecDeque<u8>,
+    write_bytes_remaining: u32,
     data_transfer_pending: bool,
 }
 
@@ -182,6 +183,7 @@ impl Sdio {
                 self.set_short_response(cmd, SHORT_R1_OK);
                 self.pending_data_cmd = None;
                 self.data_transfer_pending = false;
+                self.write_bytes_remaining = 0;
                 self.fifo_data.clear();
                 self.data_timeout_delay = 0;
                 self.sta |= STA_DATAEND;
@@ -295,10 +297,81 @@ impl Sdio {
         let _ = uc.mem_write(cr_addr, &(cr & !1).to_le_bytes());
     }
 
-    fn service_sdio_dma_reads(&mut self, sys: &System) {
+    fn service_sdio_dma_write_stream(&mut self, sys: &System, stream_base: u64) {
+        let mut uc = sys.uc.borrow_mut();
+
+        let cr_addr = stream_base;
+        let ndtr_addr = stream_base + 0x04;
+        let par_addr = stream_base + 0x08;
+        let m0ar_addr = stream_base + 0x0C;
+
+        let mut b = [0u8; 4];
+        if uc.mem_read(cr_addr, &mut b).is_err() {
+            return;
+        }
+        let cr = u32::from_le_bytes(b);
+        if (cr & 1) == 0 {
+            return;
+        }
+
+        // DIR=01 means memory-to-peripheral.
+        let dir = (cr >> 6) & 0b11;
+        if dir != 0b01 {
+            return;
+        }
+
+        if uc.mem_read(par_addr, &mut b).is_err() {
+            return;
+        }
+        let par = u32::from_le_bytes(b);
+        if par != 0x4001_2c80 {
+            return;
+        }
+
+        if uc.mem_read(ndtr_addr, &mut b).is_err() {
+            return;
+        }
+        let mut count = u32::from_le_bytes(b) & 0xFFFF;
+        if count == 0 {
+            let _ = uc.mem_write(cr_addr, &(cr & !1).to_le_bytes());
+            return;
+        }
+
+        if uc.mem_read(m0ar_addr, &mut b).is_err() {
+            return;
+        }
+        let mut maddr = u32::from_le_bytes(b);
+        let minc = (cr & (1 << 10)) != 0;
+        let msize = match (cr >> 13) & 0b11 {
+            0b00 => 1u32,
+            0b01 => 2u32,
+            0b10 => 4u32,
+            _ => 1u32,
+        };
+
+        while count > 0 && self.write_bytes_remaining > 0 {
+            let mut beat = [0u8; 4];
+            let _ = uc.mem_read(maddr as u64, &mut beat[..msize as usize]);
+            let consumed = core::cmp::min(self.write_bytes_remaining, msize);
+            self.write_bytes_remaining -= consumed;
+
+            if minc {
+                maddr = maddr.saturating_add(msize);
+            }
+            count -= 1;
+        }
+
+        let _ = uc.mem_write(ndtr_addr, &count.to_le_bytes());
+        if count == 0 {
+            let _ = uc.mem_write(cr_addr, &(cr & !1).to_le_bytes());
+        }
+    }
+
+    fn service_sdio_dma_streams(&mut self, sys: &System) {
         for stream in 0..DMA_STREAM_COUNT {
             let stream_base = DMA2_BASE + DMA_STREAM_CR_BASE_OFFSET + stream * DMA_STREAM_STRIDE;
             self.service_sdio_dma_read_stream(sys, stream_base);
+            self.service_sdio_dma_write_stream(sys, stream_base);
         }
     }
 
@@ -358,7 +431,9 @@ impl Sdio {
     }
 
     fn dcount(&self) -> u32 {
-        if self.pending_data_cmd.is_some() {
+        if self.pending_is_write_transfer() {
+            self.write_bytes_remaining
+        } else if self.pending_data_cmd.is_some() {
             (self.fifo_data.len() as u32).min(self.dlen)
         } else {
             0
@@ -377,8 +452,14 @@ impl Sdio {
 impl Peripheral for Sdio {
     fn step(&mut self, sys: &System) {
         if self.data_transfer_pending {
-            self.service_sdio_dma_reads(sys);
-            if self.fifo_data.is_empty() {
+            self.service_sdio_dma_streams(sys);
+            let transfer_done = if self.pending_is_write_transfer() {
+                self.write_bytes_remaining == 0
+            } else {
+                self.fifo_data.is_empty()
+            };
+
+            if transfer_done {
                 self.sta |= STA_DATAEND;
                 self.data_timeout_delay = 0;
                 self.data_transfer_pending = false;
@@ -490,22 +571,31 @@ impl Peripheral for Sdio {
                         return;
                     }
 
-                    // Data transfer enabled: prepare synthetic payload and complete when DMA consumes it.
-                    self.prime_fifo_for_data_transfer();
-                    self.service_sdio_dma_reads(_sys);
-                    if self.fifo_data.is_empty() {
-                        self.sta |= STA_DATAEND;
-                        self.data_timeout_delay = 0;
-                        self.data_transfer_pending = false;
-                        self.clear_sdio_dma_en_bits(_sys);
-                        self.maybe_raise_irq(_sys);
-                    } else {
+                    if self.pending_is_write_transfer() {
+                        self.write_bytes_remaining = self.dlen;
+                        self.fifo_data.clear();
                         self.data_transfer_pending = true;
-                        // Keep timeout path active while waiting for DMA stream enable.
                         self.data_timeout_delay = DATA_TIMEOUT_DELAY_STEPS;
+                    } else {
+                        // Data read transfer: prepare synthetic payload and complete when DMA consumes it.
+                        self.write_bytes_remaining = 0;
+                        self.prime_fifo_for_data_transfer();
+                        self.service_sdio_dma_streams(_sys);
+                        if self.fifo_data.is_empty() {
+                            self.sta |= STA_DATAEND;
+                            self.data_timeout_delay = 0;
+                            self.data_transfer_pending = false;
+                            self.clear_sdio_dma_en_bits(_sys);
+                            self.maybe_raise_irq(_sys);
+                        } else {
+                            self.data_transfer_pending = true;
+                            // Keep timeout path active while waiting for DMA stream enable.
+                            self.data_timeout_delay = DATA_TIMEOUT_DELAY_STEPS;
+                        }
                     }
                 } else {
                     self.data_transfer_pending = false;
+                    self.write_bytes_remaining = 0;
                     self.data_timeout_delay = 0;
                 }
             }
