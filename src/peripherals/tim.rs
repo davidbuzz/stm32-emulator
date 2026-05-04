@@ -16,6 +16,9 @@ use crate::{emulator::NUM_INSTRUCTIONS, system::System};
 
 use super::{Peripheral, meta::DeviceMeta};
 
+const RCC_BASE: u64 = 0x4002_3800;
+const RCC_CFGR_OFFSET: u64 = 0x08;
+
 #[derive(Default)]
 pub struct Tim {
     name: String,
@@ -59,6 +62,7 @@ pub struct Tim {
     arr_pending: bool,
     psc_pending: bool,
     last_clk: u64,
+    timer_clk_accum: u64,
     psc_accum: u64,
 }
 
@@ -191,8 +195,16 @@ impl Tim {
             return;
         }
 
+        let timer_div = self.timer_clock_divider(sys) as u64;
+        self.timer_clk_accum = self.timer_clk_accum.saturating_add(delta as u64);
+        let timer_input_ticks = self.timer_clk_accum / timer_div;
+        self.timer_clk_accum %= timer_div;
+        if timer_input_ticks == 0 {
+            return;
+        }
+
         let step = self.psc.saturating_add(1);
-        self.psc_accum = self.psc_accum.saturating_add(delta as u64);
+        self.psc_accum = self.psc_accum.saturating_add(timer_input_ticks);
 
         let step = step.max(1) as u64;
         let ticks = (self.psc_accum / step) as u32;
@@ -348,6 +360,41 @@ impl Tim {
             }
 
             self.trigger_update_event(sys, true);
+        }
+    }
+
+    fn timer_clock_divider(&self, sys: &System) -> u32 {
+        let mut cfgr = [0u8; 4];
+        if sys.uc.borrow().mem_read(RCC_BASE + RCC_CFGR_OFFSET, &mut cfgr).is_err() {
+            return 1;
+        }
+
+        let cfgr = u32::from_le_bytes(cfgr);
+        let ppre1 = (cfgr >> 10) & 0b111;
+        let ppre2 = (cfgr >> 13) & 0b111;
+
+        let decode = |ppre: u32| -> u32 {
+            match ppre {
+                0b000..=0b011 => 1,
+                0b100 => 2,
+                0b101 => 4,
+                0b110 => 8,
+                0b111 => 16,
+                _ => 1,
+            }
+        };
+
+        let apb_div = if matches!(self.name.as_str(), "TIM1" | "TIM8" | "TIM9" | "TIM10" | "TIM11") {
+            decode(ppre2)
+        } else {
+            decode(ppre1)
+        };
+
+        if apb_div == 1 {
+            1
+        } else {
+            // STM32F4 timers clock at 2x PCLK when APB prescaler is not 1.
+            apb_div / 2
         }
     }
 
