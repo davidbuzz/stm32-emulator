@@ -997,12 +997,19 @@ pub fn fifo_write(ep: usize, word: u32) {
             // Each 32-bit write consumes one FIFO word.
             s.out_tx_fifo_level[ep] = s.out_tx_fifo_level[ep].saturating_sub(1);
             let free_words = s.out_tx_fifo_level[ep];
+            let depth_words = s.tx_fifo_depth_words(ep).max(1);
+            let txfe_threshold_words = std::cmp::max(1, depth_words / 2);
             if free_words == 0 {
                 // FIFO full: no empty interrupt should remain asserted.
                 s.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
-            } else if (s.diepempmsk & (1 << ep)) != 0 && (s.diepctl[ep] & DIEPCTL_EPENA) != 0 {
+            } else if (s.diepempmsk & (1 << ep)) != 0
+                && (s.diepctl[ep] & DIEPCTL_EPENA) != 0
+                && free_words >= txfe_threshold_words
+            {
                 // Keep TXFE aligned with live free-space visibility while endpoint is active.
                 s.mark_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+            } else {
+                s.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
             }
         }
 
