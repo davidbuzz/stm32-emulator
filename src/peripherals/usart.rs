@@ -496,8 +496,10 @@ impl Peripheral for Usart {
             0x0000 => {
                 // SR write does not directly clear status flags in this model.
                 // Receive/error classes are cleared by SR->DR reads.
-                // TC is cleared when a new transmission starts (DR write with TX enabled).
-                let _ = value;
+                // TC can also be cleared by writing 0 to SR.TC.
+                if (value & USART_SR_TC) == 0 {
+                    self.sr &= !USART_SR_TC;
+                }
                 self.maybe_raise_irq(sys);
             }
             0x0004 => {
