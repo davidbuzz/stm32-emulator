@@ -996,8 +996,14 @@ pub fn fifo_write(ep: usize, word: u32) {
         if ep < EP_COUNT {
             // Each 32-bit write consumes one FIFO word.
             s.out_tx_fifo_level[ep] = s.out_tx_fifo_level[ep].saturating_sub(1);
-            // Once data is queued, TX FIFO is no longer "empty" for TXFE purposes.
-            s.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+            let free_words = s.out_tx_fifo_level[ep];
+            if free_words == 0 {
+                // FIFO full: no empty interrupt should remain asserted.
+                s.clear_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+            } else if (s.diepempmsk & (1 << ep)) != 0 && (s.diepctl[ep] & DIEPCTL_EPENA) != 0 {
+                // Keep TXFE aligned with live free-space visibility while endpoint is active.
+                s.mark_in_endpoint_interrupt(ep, DIEPINT_TXFE);
+            }
         }
 
         // In console-only mode, stream EP1 bytes immediately so output is visible
