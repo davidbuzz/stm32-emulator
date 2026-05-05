@@ -302,9 +302,14 @@ impl Peripherals {
 
         assert!(byte_offset + size <= 4);
 
-        if byte_offset != 0 {
-            let v = self.read(sys, addr, 4);
-            value = (value << 8*byte_offset) | (v & (0xFFFF_FFFF >> (32-8*byte_offset)));
+        if size < 4 {
+            let prior = self.read(sys, addr, 4); // read full 32-bit register value before partial write merge
+            let shift = 8u32 * (byte_offset as u32); // convert byte offset to bit offset
+            let width_bits = 8u32 * (size as u32); // access width in bits (8/16/24)
+            let field_mask = ((1u64 << width_bits) - 1) as u32; // mask of incoming field width
+            let write_mask = field_mask << shift; // mask aligned to target byte lane(s)
+            let shifted_value = (value & field_mask) << shift; // place incoming data at target lane(s)
+            value = (prior & !write_mask) | shifted_value; // preserve untouched lanes
         }
 
         if self.core_debug.borrow().handles(addr) {

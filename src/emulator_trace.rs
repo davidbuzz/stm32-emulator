@@ -60,11 +60,61 @@ pub struct TraceState {
     saw_disk_read_call_driver: bool,
     saw_disk_read_return_from_driver: bool,
     disk_read_retry_hits: u32,
+    port_switch_trace_hits: u32,
 }
 
 impl TraceState {
+    fn read_u32(uc: &Unicorn<()>, addr: u64) -> Option<u32> {
+        let mut b = [0u8; 4]; // 32-bit little-endian word width
+        if uc.mem_read(addr, &mut b).is_ok() {
+            Some(u32::from_le_bytes(b))
+        } else {
+            None
+        }
+    }
+
     pub fn on_instruction(&mut self, uc: &Unicorn<()>, pc32: u32) {
         let pc_aligned = pc32 & !1;
+        if self.port_switch_trace_hits < 16 && pc_aligned == 0x0800_5438 { // __port_switch prologue entry PC
+            self.port_switch_trace_hits += 1;
+            let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+            let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+            let old_ctx_sp = Self::read_u32(uc, r1 + 12).unwrap_or(0); // thread_t.ctx.sp field offset
+            let new_ctx_sp = Self::read_u32(uc, r0 + 12).unwrap_or(0); // thread_t.ctx.sp field offset
+            info!(
+                "TRACE __port_switch entry hit={} r0(new)=0x{r0:08x} r1(old)=0x{r1:08x} old->sp=0x{old_ctx_sp:08x} new->sp=0x{new_ctx_sp:08x}",
+                self.port_switch_trace_hits
+            );
+        }
+        if pc_aligned == 0x0800_544c { // __port_switch ldmia ...,{...,pc} site
+            if self.port_switch_trace_hits < 32 { // cap detailed per-switch dumps
+                self.port_switch_trace_hits += 1;
+            }
+            let sp = uc.reg_read(RegisterARM::SP).unwrap_or(0);
+            let r4 = Self::read_u32(uc, sp).unwrap_or(0);
+            let r5 = Self::read_u32(uc, sp + 4).unwrap_or(0); // stacked callee-saved slot +0x04
+            let r6 = Self::read_u32(uc, sp + 8).unwrap_or(0); // stacked callee-saved slot +0x08
+            let r7 = Self::read_u32(uc, sp + 12).unwrap_or(0); // stacked callee-saved slot +0x0C
+            let r8 = Self::read_u32(uc, sp + 16).unwrap_or(0); // stacked callee-saved slot +0x10
+            let r9 = Self::read_u32(uc, sp + 20).unwrap_or(0); // stacked callee-saved slot +0x14
+            let r10 = Self::read_u32(uc, sp + 24).unwrap_or(0); // stacked callee-saved slot +0x18
+            let r11 = Self::read_u32(uc, sp + 28).unwrap_or(0); // stacked callee-saved slot +0x1C
+            let pc_word = Self::read_u32(uc, sp + 32).unwrap_or(0); // return PC loaded by ldmia ...,{...,pc}
+            if self.port_switch_trace_hits <= 32 { // keep verbose frame dumps bounded
+                info!(
+                    "TRACE __port_switch ldmia hit={} sp=0x{sp:08x} r4=0x{r4:08x} r5=0x{r5:08x} r6=0x{r6:08x} r7=0x{r7:08x} r8=0x{r8:08x} r9=0x{r9:08x} r10=0x{r10:08x} r11=0x{r11:08x} pc_word=0x{pc_word:08x}",
+                    self.port_switch_trace_hits
+                );
+            }
+            if !(0x0800_0001..=0x081f_ffff).contains(&pc_word) { // expected Thumb address window for CubeBlack firmware text
+                let r0 = uc.reg_read(RegisterARM::R0).unwrap_or(0);
+                let r1 = uc.reg_read(RegisterARM::R1).unwrap_or(0);
+                let new_ctx_sp = Self::read_u32(uc, r0 + 12).unwrap_or(0); // thread_t.ctx.sp field offset
+                warn!(
+                    "TRACE __port_switch invalid next PC candidate pc_word=0x{pc_word:08x} sp=0x{sp:08x} r0(new)=0x{r0:08x} r1(old)=0x{r1:08x} [r0+12]=0x{new_ctx_sp:08x}"
+                );
+            }
+        }
         if !self.saw_uart_begin_impl && pc_aligned == 0x0814_7fd4 {
             self.saw_uart_begin_impl = true;
             let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0);

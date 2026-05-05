@@ -383,6 +383,36 @@ pub fn run_emulator(config: Config, svd_device: SvdDevice, args: Args) -> Result
         }).expect("add_mem_hook failed");
     }
 
+    if crate::verbose() >= 1 {
+        let mut watch_hits: u32 = 0;
+        let critical_addr: u64 = 0x2001_9200; // ChibiOS thread context slot that later becomes __port_switch stack source
+        sys.uc
+            .borrow_mut()
+            .add_mem_hook(HookType::MEM_WRITE, 0, u64::MAX, move |uc, _type_, addr, size, value| {
+                let write_end = addr.saturating_add(size as u64);
+                let touches_critical = addr <= critical_addr && write_end > critical_addr;
+                if touches_critical {
+                    watch_hits = watch_hits.saturating_add(1);
+                    let pc = uc.reg_read(RegisterARM::PC).unwrap_or(0) as u32;
+                    let sp = uc.reg_read(RegisterARM::SP).unwrap_or(0) as u32;
+                    let lr = uc.reg_read(RegisterARM::LR).unwrap_or(0) as u32;
+                    info!(
+                        "WATCH thread_ctx_sp write#{} pc=0x{:08x} addr=0x{:08x} size={} value=0x{:08x} sp=0x{:08x} lr=0x{:08x}",
+                        watch_hits,
+                        pc,
+                        addr as u32,
+                        size,
+                        value as u32,
+                        sp,
+                        lr,
+                    );
+                }
+
+                true
+            })
+            .expect("add_mem_hook MEM_WRITE failed");
+    }
+
     let vector_table = VectorTable::from_memory(&sys.uc.borrow(), vector_table_addr)?;
     let mut pc = vector_table.reset as u64;
     if (pc & 1) == 0 {

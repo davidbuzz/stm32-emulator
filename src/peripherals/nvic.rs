@@ -551,7 +551,7 @@ impl Nvic {
         if self.should_escalate_to_hardfault(fault_type) {
             self.hardfault_pending = true;
             // HardFault is non-maskable and takes highest priority (vector 3)
-            self.set_intr_pending(-3); // HardFault IRQ number
+            self.set_intr_pending(-13); // Cortex-M exception number mapping: irq=-13 -> vector 3 (HardFault)
             true
         } else {
             match fault_type {
@@ -593,7 +593,9 @@ impl Nvic {
         if irq == 67 || irq == 50 {
             debug!("NVIC dispatching IRQ {} vector={:#08x}", irq, Self::read_vector_addr(sys, self.vector_table_addr, irq));
         }
-        let vector = Self::read_vector_addr(sys, self.vector_table_addr, irq);
+        let vector_raw = Self::read_vector_addr(sys, self.vector_table_addr, irq);
+        // Cortex-M exception vectors are always Thumb targets. Keep bit0 set for Unicorn.
+        let vector = vector_raw | 1;
 
         let mut uc = sys.uc.borrow_mut();
         let entry_msp = uc.reg_read(RegisterARM::MSP).unwrap();
@@ -606,9 +608,11 @@ impl Nvic {
             // ARMv7-M uses MSP for exception entry while already in handler mode.
             false
         } else {
-            control_reg & (1 << 1) != 0
+            control_reg & (1 << 1) != 0 // CONTROL.SPSEL (bit 1)
         };
-        let fpca = false;
+        // CONTROL.FPCA indicates FP context active for Thread mode. When set,
+        // exception entry stacks an extended frame (S0-S15, FPSCR, reserved).
+        let fpca = !in_handler_mode && (control_reg & (1 << 2) != 0); // CONTROL.FPCA (bit 2)
         trace!("Running interrupt irq={} spsel={} fpca={} vector={:#08x}",
             irq, spsel, fpca, vector);
 
@@ -624,8 +628,8 @@ impl Nvic {
         //   0xFFFF_FFFD   Thread mode    Process      Basic
 
         let mut lr: u32 = if in_handler_mode { 0xFFFF_FFE1 } else { 0xFFFF_FFE9 };
-        if !in_handler_mode && spsel { lr |= 0b0000_0100; }
-        if !fpca { lr |= 0b0001_0000; } // Yes, no fpca means the bit is set
+        if !in_handler_mode && spsel { lr |= 0b0000_0100; } // EXC_RETURN bit[2]: return uses PSP
+        if !fpca { lr |= 0b0001_0000; } // EXC_RETURN bit[4]: 1=basic frame, 0=extended FP frame
         uc.reg_write(RegisterARM::LR, lr.into()).unwrap();
 
         let exception_number = (IRQ_OFFSET + irq) as u64;
@@ -653,8 +657,9 @@ impl Nvic {
             .unwrap_or((uc.reg_read(RegisterARM::MSP).unwrap(), -999));
         let restored_xpsr;
         if lr & 0xFFFF_FF00 == 0xFFFF_FF00 {
-            let spsel = lr & 0b0000_0100 != 0;
-            let fpca = false;
+            let spsel = lr & 0b0000_0100 != 0; // EXC_RETURN bit[2]
+            // EXC_RETURN bit4: 0=extended FP frame, 1=basic frame.
+            let fpca = (lr & 0b0001_0000) == 0; // EXC_RETURN bit[4]
 
             Self::pop_regs(&mut uc, spsel, fpca);
             restored_xpsr = uc.reg_read(RegisterARM::XPSR).unwrap() as u32;
@@ -665,13 +670,13 @@ impl Nvic {
             // SPSEL, bit[1], 0 means we use MSP, 1 means we use PSP.
             // FPCA, bit[2], if the processor includes the FP extension.
             let mut control_reg = uc.reg_read(RegisterARM::CONTROL).unwrap() as u32 & 0x1;
-            if spsel { control_reg |= 1 << 1; }
-            if fpca { control_reg |= 2 << 1; }
+            if spsel { control_reg |= 1 << 1; } // CONTROL.SPSEL (bit 1)
+            if fpca { control_reg |= 2 << 1; } // CONTROL.FPCA (bit 2)
             uc.reg_write(RegisterARM::CONTROL, control_reg.into()).unwrap();
         } else {
             let control_reg = uc.reg_read(RegisterARM::CONTROL).unwrap();
-            let spsel = control_reg & (1 << 1) != 0;
-            let fpca = false;
+            let spsel = control_reg & (1 << 1) != 0; // CONTROL.SPSEL (bit 1)
+            let fpca = control_reg & (1 << 2) != 0; // CONTROL.FPCA (bit 2)
             Self::pop_regs(&mut uc, spsel, fpca);
             restored_xpsr = uc.reg_read(RegisterARM::XPSR).unwrap() as u32;
 
@@ -685,6 +690,15 @@ impl Nvic {
         }
 
         let restored_ipsr = restored_xpsr & 0x1ff;
+
+        // Cortex-M executes only in Thumb state. On real hardware the xPSR.T bit
+        // governs state on exception return; Unicorn is more sensitive to PC[0].
+        // Keep bit0 set when returning to a normal code address.
+        let restored_pc = uc.reg_read(RegisterARM::PC).unwrap() as u32;
+        if restored_pc != 0 && (restored_pc & 1) == 0 {
+            uc.reg_write(RegisterARM::PC, (restored_pc | 1) as u64).unwrap();
+        }
+
         uc.reg_write(RegisterARM::IPSR, restored_ipsr as u64).unwrap();
 
         let current_msp = uc.reg_read(RegisterARM::MSP).unwrap();
@@ -701,7 +715,7 @@ impl Nvic {
 
         let active_sp = if restored_ipsr == 0 {
             let control_reg = uc.reg_read(RegisterARM::CONTROL).unwrap() as u32;
-            if (control_reg & (1 << 1)) != 0 {
+            if (control_reg & (1 << 1)) != 0 { // CONTROL.SPSEL (bit 1)
                 uc.reg_read(RegisterARM::PSP).unwrap()
             } else {
                 uc.reg_read(RegisterARM::MSP).unwrap()
