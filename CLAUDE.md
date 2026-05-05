@@ -36,7 +36,7 @@ sha256sum cubeblack/arducopter.bin modules/ardupilot/build/CubeBlack/bin/arducop
 
 # Run CubeBlack
 cd cubeblack
-../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+../target/release/stm32-emulator config.yaml -v --max-instructions 20000000
 
 # Longer stability run with exact 120-second wall-clock cutoff
 ( /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
@@ -57,7 +57,7 @@ tail -40 ardu.cubeblack.log
 - Wrap exploratory or potentially open-ended probes with `timeout` when they are not inside a logging pipeline.
 - For exact wall-clock bounded validation runs that also capture logs, prefer a background PID plus explicit `sleep`/`kill -9` over `timeout` in a pipeline.
 - Measured on the current workspace state:
-  - `--max-instructions 3000000` takes about `1.3s`
+  - short bounded run baseline: `--max-instructions 20000000`
   - `main` is reached in about `1.6s`
   - `--max-instructions 120000000` takes about `47s`
   - `--busy-loop-stop` did not terminate quickly in one probe and was cut off at `30s` / about `70.9M` instructions
@@ -71,7 +71,7 @@ cd cubeblack
 
 # Short feedback run
 /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \
-  timeout 10 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+  timeout 10 ../target/release/stm32-emulator config.yaml -v --max-instructions 20000000
 
 # Longer stability run
 ( /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' \

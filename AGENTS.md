@@ -35,7 +35,7 @@ Repository guidance for AI coding agents working in this project.
   - ./DEV_SETUP_UBUNTU.sh
 - Run CubeBlack directly:
   - cd cubeblack
-  - ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000
+  - ../target/release/stm32-emulator config.yaml -v --max-instructions 20000000
 - Run CubeBlack long validation and capture evidence log:
   - cd cubeblack
   - (
@@ -56,7 +56,7 @@ Repository guidance for AI coding agents working in this project.
 - Prefer `timeout` for simple exploratory probes that are not being piped through log-capture helpers.
 - For long validation runs where the stop must be an exact wall-clock cutoff and output is being redirected or tailed, use a background PID plus explicit `sleep`/`kill -9` rather than relying on `timeout` inside a pipeline.
 - Current measured runtimes on this workspace state:
-  - `--max-instructions 3000000` completes in about `1.3s`
+  - short bounded run baseline: `--max-instructions 20000000`
   - `main` is reached in about `1.6s`
   - `--max-instructions 120000000` completes in about `47s`
   - `--busy-loop-stop` did not converge quickly in one probe and was cut off at `30s` / about `70.9M` instructions
@@ -65,7 +65,7 @@ Repository guidance for AI coding agents working in this project.
   - longer bounded validation runs up to `120000000` instructions: explicit 120-second PID kill
   - `--busy-loop-stop` and other open-ended probes: always wrap in `timeout 30` unless there is a specific reason not to
 - Recommended command forms:
-  - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 10 ../target/release/stm32-emulator config.yaml -v --max-instructions 3000000`
+    - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 10 ../target/release/stm32-emulator config.yaml -v --max-instructions 20000000`
   - `cd cubeblack && ( /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' ../target/release/stm32-emulator config.yaml -v --max-instructions 120000000 ) > ardu.cubeblack.log 2>&1 & pid=$!; for _ in $(seq 120); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done; kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; tail -40 ardu.cubeblack.log`
   - `cd cubeblack && /usr/bin/time -f 'real=%e user=%U sys=%S maxrss=%M exit=%x' timeout 30 ../target/release/stm32-emulator config.yaml -v --busy-loop-stop`
 - The long validation run is expected to leave behind `cubeblack/ardu.cubeblack.log` as the evidence artifact for that checkpoint.
@@ -196,6 +196,15 @@ A boot-progress fix is considered demonstrably good when:
 - This is evidence of progress, not permission to stop if another concrete blocker is now visible and actionable.
 
 ## Concrete success marker
+
+Before the full deliverable is reached, treat the following bounded-run output as the current quick success checkpoint:
+
+- Command: `cd cubeblack && ../target/release/stm32-emulator config.yaml --max-instructions 20000000`
+- Expected ordered marker subsequence:
+  - `[clk=00467227 pc=0x0815bc4a] INFO  OTG_FS: SetLineCoding ZLP done -> DeliverSetControlLineState`
+  - `[clk=10645971 pc=0x080f27f8] INFO  TRACE AP_Vehicle::setup reached pc=0x08082f48`
+  - `[clk=10659256 pc=0x08138ca6] INFO  TRACE AP_RAMTRON::read transfer return reached pc=0x08138ca8`
+- After those markers, output should later contain a line with at least `ArduCopter`.
 
 Treat the CubeBlack/ArduPilot deliverable as reached only when all of the following are true:
 
